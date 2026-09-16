@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#6c5ce7">
+<title>Slovko — Uč se jazyky hrou</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%89%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button id="logoBtn" class="logo-btn" title="Domů">
+      <span class="logo-owl" id="logoOwl">🦉</span>
+      <span class="logo-text">Slovko</span>
+    </button>
+    <button id="musicBtn" class="top-pill music" title="Hudba">
+      <span id="musicIco">🎵</span>
+    </button>
+    <div id="streakBox" class="top-pill" title="Den za sebou">
+      <span class="pill-ico">🔥</span><span id="streakVal">0</span>
+    </div>
+    <div id="heartsBox" class="top-pill hearts" title="Srdce (životy)">
+      <span class="pill-ico">❤️</span><span id="heartsVal">5</span>
+    </div>
+    <button id="xpBox" class="xp-pill" title="Tvoje zkušenost">
+      <span class="pill-ico">⚡</span>
+      <span class="xp-stack">
+        <span id="xpVal">0</span>
+        <span id="xpLevel" class="xp-level">Úr. 1</span>
+      </span>
+      <span id="xpBar" class="xp-bar"><span id="xpBarFill"></span></span>
+    </button>
+  </header>
+
+  <main id="view"></main>
+
+  <nav id="bottomnav" class="bottom-nav">
+    <button class="nav-btn active" data-nav="path"><span class="nav-ico">🗺️</span><span>Učení</span></button>
+    <button class="nav-btn" data-nav="achiev"><span class="nav-ico">🎖️</span><span>Úspěchy</span></button>
+    <button class="nav-btn" data-nav="leaderboard"><span class="nav-ico">🏆</span><span>Žebříček</span></button>
+    <button class="nav-btn" data-nav="profile"><span class="nav-ico">🐼</span><span>Profil</span></button>
+  </nav>
+
+  <div id="toasts" class="toasts"></div>
+  <canvas id="confetti"></canvas>
+</div>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

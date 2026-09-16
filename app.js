@@ -1,0 +1,1245 @@
+/* ============================================================
+   SLOVKO — herní logika
+   ============================================================ */
+"use strict";
+
+/* ---------- pomocné funkce ---------- */
+const $  = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const rnd = (a, b) => a + Math.random() * (b - a);
+const randi = (a, b) => Math.floor(rnd(a, b + 1));
+const pick = arr => arr[randi(0, arr.length - 1)];
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = randi(0, i);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+function norm(s) {
+  return (s || "").toLowerCase().replace(/[\s.,!?'"()\-–—:;!¿¡]+/g, "");
+}
+function stripAcc(s) {
+  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function isSame(a, b) {
+  return norm(a) === norm(b) || stripAcc(norm(a)) === stripAcc(norm(b));
+}
+function dateStr(d) {
+  d = d || new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function yesterdayStr() {
+  const d = new Date(); d.setDate(d.getDate() - 1); return dateStr(d);
+}
+function el(tag, props, children) {
+  const e = document.createElement(tag);
+  if (props) {
+    for (const k in props) {
+      if (k === "class") e.className = props[k];
+      else if (k === "style") e.style.cssText = props[k];
+      else if (k === "text") e.textContent = props[k];
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), props[k]);
+      else if (k === "html") e.innerHTML = props[k];
+      else e.setAttribute(k, props[k]);
+    }
+  }
+  const kids = children == null ? [] : (Array.isArray(children) ? children : [children]);
+  kids.forEach(c => {
+    if (c == null) return;
+    if (typeof c === "string" || typeof c === "number") e.appendChild(document.createTextNode(c));
+    else e.appendChild(c);
+  });
+  return e;
+}
+
+/* ---------- úroveň / XP ---------- */
+function levelInfo(xp) {
+  let level = 1, rem = xp, need = 80;
+  while (rem >= need) { rem -= need; level++; need = 80 + (level - 1) * 40; }
+  return { level, into: rem, need, name: LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)] };
+}
+
+/* ---------- zvuky (Web Audio) ---------- */
+const Sound = (() => {
+  let ctx = null;
+  function ac() {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+  function tone(freq, start, dur, type, vol) {
+    const c = ac();
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, c.currentTime + start);
+    g.gain.linearRampToValueAtTime(vol || 0.18, c.currentTime + start + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + start + dur);
+    o.connect(g); g.connect(c.destination);
+    o.start(c.currentTime + start); o.stop(c.currentTime + start + dur + 0.05);
+  }
+  return {
+    init() { ac(); },
+    click() { tone(700, 0, 0.06, "triangle", 0.1); },
+    correct(combo) {
+      const base = 440 * Math.pow(2, Math.min(combo - 1, 12) / 12);
+      tone(base, 0, 0.12, "triangle", 0.16);
+      tone(base * 1.26, 0.09, 0.16, "triangle", 0.16);
+      if (combo % 5 === 0) tone(base * 1.5, 0.18, 0.18, "triangle", 0.14);
+    },
+    wrong() { tone(180, 0, 0.22, "square", 0.1); tone(130, 0.12, 0.28, "square", 0.1); },
+    heart() { tone(660, 0, 0.1, "sine", 0.14); tone(880, 0.08, 0.16, "sine", 0.14); },
+    fanfare() { [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.11, 0.22, "triangle", 0.17)); },
+    levelup() { [392, 523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, i * 0.09, 0.2, "triangle", 0.16)); },
+    fail() { [400, 330, 262, 196].forEach((f, i) => tone(f, i * 0.16, 0.22, "sawtooth", 0.09)); }
+  };
+})();
+
+/* ---------- konfety ---------- */
+const Confetti = (() => {
+  const cv = $("#confetti");
+  const cx = cv.getContext("2d");
+  let parts = [], running = false;
+  const COLORS = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#6c5ce7", "#fd79a8", "#fbc531"];
+  function resize() { cv.width = innerWidth; cv.height = innerHeight; }
+  addEventListener("resize", resize); resize();
+  function burst(n) {
+    for (let i = 0; i < n; i++) {
+      parts.push({
+        x: innerWidth / 2 + rnd(-80, 80), y: innerHeight * 0.35 + rnd(-40, 40),
+        vx: rnd(-6, 6), vy: rnd(-12, -3),
+        w: rnd(6, 12), h: rnd(8, 16),
+        rot: rnd(0, Math.PI * 2), vr: rnd(-0.3, 0.3),
+        color: pick(COLORS), life: 1
+      });
+    }
+    if (!running) { running = true; requestAnimationFrame(loop); }
+  }
+  function loop() {
+    cx.clearRect(0, 0, cv.width, cv.height);
+    parts = parts.filter(p => p.life > 0 && p.y < innerHeight + 20);
+    parts.forEach(p => {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.vx *= 0.99; p.rot += p.vr; p.life -= 0.012;
+      cx.save();
+      cx.translate(p.x, p.y); cx.rotate(p.rot);
+      cx.globalAlpha = Math.max(p.life, 0);
+      cx.fillStyle = p.color;
+      cx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      cx.restore();
+    });
+    if (parts.length) requestAnimationFrame(loop);
+    else { running = false; cx.clearRect(0, 0, cv.width, cv.height); }
+  }
+  return { burst };
+})();
+
+/* ---------- pozadí hudba (procedurální smyčka) ---------- */
+const Music = (() => {
+  let ctx = null, timer = null, on = false, step = 0, chordIdx = 0, nextTime = 0;
+  const TICK = 0.5;
+  const chords = [
+    [48, 55, 60, 64],   /* Cmaj */
+    [50, 55, 59, 62],   /* Dm7 */
+    [52, 59, 62, 67],   /* Gmaj */
+    [47, 54, 59, 62]    /* Bb/A */
+  ];
+  const arp = [0, 1, 2, 3, 2, 1];
+  const keys = { "c3":130.81, "d3":146.83, "e3":164.81, "f3":174.61, "g3":196.00, "a3":220.00, "b3":246.94,
+                 "c4":261.63, "d4":293.66, "e4":329.63, "f4":349.23, "g4":392.00, "a4":440.00, "b4":493.88, "c5":523.25 };
+  function ac() {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+  function tone(freq, t, dur, type, vol, lp) {
+    const c = ac();
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type; o.frequency.value = freq;
+    if (lp) {
+      const f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = lp;
+      o.connect(f); f.connect(g);
+    } else o.connect(g);
+    g.gain.setValueAtTime(0, c.currentTime + t);
+    g.gain.linearRampToValueAtTime(vol, c.currentTime + t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + t + dur);
+    g.connect(c.destination);
+    o.start(c.currentTime + t); o.stop(c.currentTime + t + dur + 0.05);
+  }
+  function midi(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+  function schedule() {
+    if (!on) return;
+    const c = ac();
+    while (nextTime < c.currentTime + 0.4) {
+      const ch = chords[chordIdx];
+      const rel = step / 8;
+      if (rel === 0) {
+        ch.forEach(n => tone(midi(n), nextTime - c.currentTime, 6, "sine", 0.045, 700));
+        tone(midi(ch[0] - 12), nextTime - c.currentTime, 5, "triangle", 0.05, 400);
+      }
+      const ar = arp[step % arp.length];
+      tone(midi(ch[ar % ch.length] + 12), nextTime - c.currentTime, 0.8, "triangle", 0.045);
+      if (step % 4 === 2) tone(midi(ch[0] + 24), nextTime - c.currentTime, 0.6, "sine", 0.03);
+      step++;
+      if (step % 8 === 0) { chordIdx = (chordIdx + 1) % chords.length; }
+      nextTime += TICK;
+    }
+  }
+  function start() {
+    if (on) return;
+    on = true;
+    try {
+      ac();
+      nextTime = ctx.currentTime + 0.1;
+      if (timer) clearInterval(timer);
+      timer = setInterval(schedule, 200);
+    } catch (e) { on = false; }
+  }
+  function stop() {
+    on = false;
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+  function toggle() {
+    if (on) { stop(); return false; }
+    start(); return true;
+  }
+  return { start, stop, toggle, get on() { return on; } };
+})();
+
+/* ---------- TTS výslovnost ---------- */
+const Speak = {
+  _voices: [],
+  load() {
+    if ("speechSynthesis" in window) {
+      this._voices = speechSynthesis.getVoices();
+      speechSynthesis.onvoiceschanged = () => { this._voices = speechSynthesis.getVoices(); };
+    }
+  },
+  say(text, lang) {
+    if (!("speechSynthesis" in window)) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang || "ja-JP";
+    u.rate = 0.85; u.pitch = 1;
+    const v = this._voices.find(v => v.lang === (lang || "ja-JP"));
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  }
+};
+
+/* ---------- rozpoznávání řeči (výslovnost) ---------- */
+const Recog = (() => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const available = !!SR;
+  let current = null;
+  function listen(lang, onResult, onEnd) {
+    if (!SR) return false;
+    try {
+      if (current) { try { current.abort(); } catch (e) {} }
+      const r = new SR();
+      current = r;
+      r.lang = lang;
+      r.interimResults = false;
+      r.maxAlternatives = 3;
+      r.onresult = (e) => {
+        const texts = [];
+        for (let i = 0; i < e.results.length; i++) texts.push(e.results[i][0].transcript);
+        onResult(texts);
+      };
+      r.onerror = (e) => { try { r.stop(); } catch (x) {} onEnd && onEnd(e.error); };
+      r.onend = () => { current = null; };
+      r.start();
+      return true;
+    } catch (e) { return false; }
+  }
+  function stop() { if (current) { try { current.stop(); } catch (e) {} } current = null; }
+  function match(transcripts, w, lang) {
+    const exRomaji = norm(w.romaji);
+    const exKana = norm(w.ja);
+    const exText = norm(w[lang]);
+    for (const t0 of transcripts) {
+      const t = norm(t0);
+      if (!t) continue;
+      if (t === exKana || t === exRomaji || t === exText) return true;
+      if (t.indexOf(exKana) !== -1 || t.indexOf(exRomaji) !== -1) return true;
+      if (t.split(/\s+/).indexOf(exRomaji) !== -1 || t.split(/\s+/).indexOf(exText) !== -1) return true;
+    }
+    return false;
+  }
+  return { available, listen, stop, match };
+})();
+
+/* ---------- žebříček (MantleDB — bez registrace) ---------- */
+const LB = {
+  URL: "https://mantledb.sh/v2/slovko-lb/scores",
+  syncing: false,
+  async sync() {
+    if (!navigator.onLine || this.syncing) return null;
+    this.syncing = true;
+    try {
+      let scores = [];
+      try {
+        const r = await fetch(this.URL, { cache: "no-store" });
+        if (r.ok) {
+          const d = await r.json();
+          if (Array.isArray(d)) scores = d;
+        }
+      } catch (e) {}
+      const name = (state.playerName || "Hráč").slice(0, 16);
+      const li = levelInfo(state.xp);
+      const me = { name, lang: state.lang, xp: state.xp, level: li.level, streak: state.streak, ts: Date.now() };
+      scores = scores.filter(s => !(s && s.name === me.name));
+      scores.push(me);
+      scores.sort((a, b) => (b.xp || 0) - (a.xp || 0));
+      scores = scores.slice(0, 50);
+      const r2 = await fetch(this.URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scores)
+      });
+      if (!r2.ok) return null;
+      state.lbSync++;
+      save();
+      checkAchievements();
+      return scores;
+    } catch (e) {
+      return null;
+    } finally {
+      this.syncing = false;
+    }
+  },
+  async fetch() {
+    try {
+      const r = await fetch(this.URL, { cache: "no-store" });
+      if (!r.ok) return [];
+      const d = await r.json();
+      return Array.isArray(d) ? d : [];
+    } catch (e) { return []; }
+  }
+};
+
+/* ---------- stav ---------- */
+const KEY = "slovko_v1";
+const DEFAULTS = {
+  xp: 0, streak: 0, bestStreak: 0, lastPlay: null,
+  hearts: 5, heartsRegenAt: 0,
+  lang: "ja", dailyGoal: 50, dailyXp: 0, dailyDate: dateStr(),
+  lessons: 0, perfectLessons: 0, maxCombo: 0, langsTried: {},
+  mastery: {}, unitDone: {}, unlocked: {},
+  achievements: {},
+  playerName: "", music: true,
+  lbSync: 0, speakCount: 0, listenCount: 0
+};
+let state;
+function loadState() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    state = raw ? Object.assign({}, DEFAULTS, JSON.parse(raw)) : Object.assign({}, DEFAULTS);
+  } catch (e) { state = Object.assign({}, DEFAULTS); }
+  if (state.dailyDate !== dateStr()) { state.dailyDate = dateStr(); state.dailyXp = 0; }
+  catchUpHearts();
+  ensureUnlocks();
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+}
+function ensureUnlocks() {
+  const l = state.lang;
+  if (!state.unlocked[l]) state.unlocked[l] = [UNITS[0].id];
+}
+function catchUpHearts() {
+  if (state.hearts >= 5) return;
+  const now = Date.now();
+  while (state.hearts < 5 && state.heartsRegenAt && now >= state.heartsRegenAt) {
+    state.hearts++;
+    state.heartsRegenAt += 30 * 60 * 1000;
+  }
+  if (state.hearts >= 5) state.heartsRegenAt = 0;
+}
+
+/* mastery */
+function getMastery(wid) { return (state.mastery[state.lang] || {})[wid] || 0; }
+function setMastery(wid, v) {
+  state.mastery[state.lang] = state.mastery[state.lang] || {};
+  state.mastery[state.lang][wid] = Math.max(0, Math.min(5, v));
+}
+function unitIsDone(uid) { return !!(state.unitDone[state.lang] || {})[uid]; }
+function unitUnlocked(uid) {
+  const list = state.unlocked[state.lang] || [];
+  if (list.indexOf(uid) !== -1) return true;
+  const i = UNITS.findIndex(u => u.id === uid);
+  return i > 0 && unitIsDone(UNITS[i - 1].id);
+}
+function completeUnit(uid) {
+  state.unitDone[state.lang] = state.unitDone[state.lang] || {};
+  if (!state.unitDone[state.lang][uid]) {
+    state.unitDone[state.lang][uid] = true;
+    const i = UNITS.findIndex(u => u.id === uid);
+    const next = UNITS[i + 1];
+    if (next && state.unlocked[state.lang].indexOf(next.id) === -1) {
+      state.unlocked[state.lang].push(next.id);
+    }
+  }
+}
+
+/* ---------- topbar ---------- */
+function renderTop() {
+  $("#streakVal").textContent = state.streak;
+  $("#heartsVal").textContent = state.hearts;
+  const li = levelInfo(state.xp);
+  $("#xpVal").textContent = state.xp;
+  $("#xpLevel").textContent = "Úr. " + li.level;
+  $("#xpBarFill").style.width = (li.into / li.need * 100) + "%";
+}
+
+/* ---------- toast / flying xp ---------- */
+function toast(html) {
+  const t = el("div", { class: "toast", html });
+  $("#toasts").appendChild(t);
+  setTimeout(() => { t.classList.add("gone"); setTimeout(() => t.remove(), 320); }, 2600);
+}
+function flyXp(text) {
+  const d = el("div", { class: "fly-xp", text });
+  d.style.left = (innerWidth / 2 - 30) + "px";
+  d.style.top = (innerHeight * 0.3) + "px";
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 1000);
+}
+
+/* ---------- sova (maskot) ---------- */
+const Mascot = (() => {
+  const host = el("div", { id: "mascot" });
+  const bubble = el("div", { class: "mascot-bubble" });
+  const face = el("div", { class: "mascot-face", text: "🦉" });
+  host.appendChild(bubble); host.appendChild(face);
+  $("#app").appendChild(host);
+  let t = null;
+  function say(text, ms) {
+    bubble.textContent = text;
+    host.style.display = "flex";
+    if (t) clearTimeout(t);
+    if (ms) t = setTimeout(hide, ms);
+  }
+  function hide() { host.style.display = "none"; }
+  function mood(m) { face.textContent = m; }
+  return { say, hide, mood };
+})();
+
+/* ---------- navigace ---------- */
+let currentView = "path";
+function showView(name) {
+  currentView = name;
+  $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.nav === name));
+  if (name === "path") renderPath();
+  else if (name === "achiev") renderAchievements();
+  else if (name === "leaderboard") renderLeaderboard();
+  else if (name === "profile") renderProfile();
+  const v = $("#view"); v.scrollTop = 0;
+}
+$("#logoBtn").addEventListener("click", () => { Sound.init(); Sound.click(); showView("path"); });
+$("#xpBox").addEventListener("click", () => { Sound.click(); showView("profile"); });
+$$(".nav-btn").forEach(b => b.addEventListener("click", () => { Sound.init(); Sound.click(); showView(b.dataset.nav); }));
+$("#musicBtn").addEventListener("click", () => {
+  Sound.init();
+  state.music = Music.toggle();
+  save();
+  $("#musicBtn").classList.toggle("off", !state.music);
+  $("#musicIco").textContent = state.music ? "🎵" : "🔇";
+});
+
+/* ---------- HLAVNÍ OBRAZOVKA (cesta) ---------- */
+function renderPath() {
+  const v = $("#view");
+  v.innerHTML = "";
+  const lang = LANGS[state.lang];
+
+  v.appendChild(el("div", { class: "screen-head" },
+    [ el("span", { class: "icon", text: lang.flag }),
+      el("div", { class: "title", text: "Co se dnes naučíš?" }),
+      el("button", { class: "speak-btn", text: "🔊", onclick: () => { Sound.click(); Speak.say(lang.native, lang.tts); } }) ]));
+
+  /* výběr jazyka */
+  const grid = el("div", { class: "lang-grid" });
+  Object.keys(LANGS).forEach(code => {
+    const l = LANGS[code];
+    grid.appendChild(el("button", {
+      class: "lang-card" + (code === state.lang ? " selected" : ""), onclick: () => {
+        Sound.click(); state.lang = code; ensureUnlocks(); save(); renderPath(); renderTop();
+      }
+    }, [
+      el("span", { class: "flag", text: l.flag }),
+      el("span", { class: "name", text: l.name }),
+      el("span", { class: "lang-sub", text: l.native })
+    ]));
+  });
+  v.appendChild(grid);
+
+  /* denní cíl */
+  const goal = Math.min(state.dailyXp, state.dailyGoal);
+  const goalPct = Math.round(goal / state.dailyGoal * 100);
+  v.appendChild(el("div", { class: "card goal-box" }, [
+    el("span", { class: "g-ico", text: goalPct >= 100 ? "🎯" : "🎁" }),
+    el("div", { class: "goal-wrap" }, [
+      el("div", { class: "sub", text: "Denní cíl: " + state.dailyXp + " / " + state.dailyGoal + " XP" }),
+      el("div", { class: "goal-bar" }, [el("span", { style: "width:" + goalPct + "%" })])
+    ])
+  ]));
+
+  /* cesta s jednotkami */
+  const path = el("div", { class: "path" });
+  UNITS.forEach((u, i) => {
+    const done = unitIsDone(u.id);
+    const unlocked = unitUnlocked(u.id);
+    const mastered = u.words.filter(w => getMastery(w.id) >= 3).length;
+    const node = el("div", { class: "unit-node" }, [
+      el("div", { class: "connector" }),
+      el("button", {
+        class: "unit-btn" + (done ? " done" : "") + (unlocked ? "" : " locked"),
+        onclick: () => {
+          if (!unlocked) { Sound.init(); Sound.wrong(); toast("🔒 Dokonči předchozí jednotku!"); return; }
+          Sound.init(); Sound.click();
+          startLesson(u, "lesson");
+        }
+      }, [
+        el("span", { class: "u-ico", text: unlocked ? u.ico : "🔒" }),
+        el("div", { class: "u-info" }, [
+          el("div", { class: "u-name", text: "Jednotka " + (i + 1) + " · " + u.name }),
+          el("div", { class: "u-prog", text: mastered + " / " + u.words.length + " slov zvládnuto" })
+        ]),
+        el("div", { class: "u-stars", text: done ? "⭐ " + (u.words.length) + " slov" : (unlocked ? "▶ Start" : "Zamčeno") })
+      ])
+    ]);
+    path.appendChild(node);
+  });
+  v.appendChild(path);
+
+  /* tréninky */
+  const drill = el("div", { class: "drill-row" });
+  drill.appendChild(el("button", { class: "drill-card blue", onclick: () => { Sound.init(); Sound.click(); startDrill("listen"); } },
+    [ el("div", { class: "d-ico", text: "🎧" }), el("div", { class: "d-name", text: "Poslech" }), el("div", { class: "d-desc", text: "Trénuj ucho na " + lang.name })]));
+  drill.appendChild(el("button", { class: "drill-card pink", onclick: () => { Sound.init(); Sound.click(); startDrill("speak"); } },
+    [ el("div", { class: "d-ico", text: "🎤" }), el("div", { class: "d-name", text: "Výslovnost" }), el("div", { class: "d-desc", text: "Mluv a nech se poznat" })]));
+  v.appendChild(drill);
+
+  /* praxe pro obnovu srdcí */
+  if (state.hearts < 5) {
+    v.appendChild(el("div", { class: "card", style: "text-align:center" }, [
+      el("div", { class: "sub", style: "margin-bottom:8px" }, "Srdce se obnovují (1 / 30 min) — nebo si procvičuj a získej hned ❤️"),
+      el("button", { class: "btn-big violet", text: "🎯 Cvičení (získej ❤️)", onclick: () => { Sound.click(); startPractice(); } })
+    ]));
+  }
+}
+
+/* ---------- ÚSPĚCHY ---------- */
+function achValue(track) {
+  switch (track) {
+    case "lessons": return state.lessons;
+    case "maxCombo": return state.maxCombo;
+    case "perfectLessons": return state.perfectLessons;
+    case "langsTried": return Object.keys(state.langsTried).length;
+    case "bestStreak": return state.bestStreak;
+    case "mastered": {
+      let c = 0; const m = state.mastery[state.lang] || {};
+      Object.keys(m).forEach(k => { if (m[k] >= 5) c++; }); return c;
+    }
+    case "totalXp": return state.xp;
+    case "lbSync": return state.lbSync;
+    case "speakCount": return state.speakCount;
+    case "listenCount": return state.listenCount;
+  }
+  return 0;
+}
+function renderAchievements() {
+  const v = $("#view");
+  v.innerHTML = "";
+  v.appendChild(el("div", { class: "screen-head" }, [
+    el("span", { class: "icon", text: "🏆" }),
+    el("div", { class: "title", text: "Úspěchy" }),
+    el("span", { class: "icon", text: "🏆" })
+  ]));
+  const unlockedCount = ACHIEVEMENTS.filter(a => state.achievements[a.id]).length;
+  v.appendChild(el("div", { class: "card", style: "text-align:center" }, [
+    el("h2", { text: unlockedCount + " / " + ACHIEVEMENTS.length + " odemčeno" }),
+    el("div", { class: "sub", text: "Sběrej všechny!" })
+  ]));
+  const grid = el("div", { class: "ach-grid" });
+  ACHIEVEMENTS.forEach(a => {
+    const val = achValue(a.track);
+    const unlocked = !!state.achievements[a.id];
+    grid.appendChild(el("div", {
+      class: "ach" + (unlocked ? " unlocked" : "")
+    }, [
+      el("div", { class: "a-ico", text: unlocked ? a.ico : "🔒" }),
+      el("div", { class: "a-name", text: a.name }),
+      el("div", { class: "a-desc", text: a.desc }),
+      el("div", { class: "a-prog", text: unlocked ? "✓ Odemčeno" : (Math.min(val, a.goal) + " / " + a.goal) })
+    ]));
+  });
+  v.appendChild(grid);
+}
+
+/* ---------- ŽEBŘÍČEK ---------- */
+function renderLeaderboard() {
+  const v = $("#view");
+  v.innerHTML = "";
+  v.appendChild(el("div", { class: "screen-head" }, [
+    el("span", { class: "icon", text: "🏆" }),
+    el("div", { class: "title", text: "Žebříček" }),
+    el("button", { class: "speak-btn", text: "🔄", onclick: () => { Sound.click(); renderLeaderboard(); } })
+  ]));
+
+  v.appendChild(el("div", { class: "card name-row" }, [
+    el("input", {
+      class: "name-input", type: "text", value: state.playerName,
+      placeholder: "Tvoje přezdívka…",
+      maxlength: "16"
+    }),
+    el("button", {
+      class: "btn-save", text: "Uložit", onclick: (e) => {
+        const inp = e.currentTarget.previousSibling;
+        state.playerName = (inp.value || "").trim().slice(0, 16);
+        save();
+        toast("✅ Jméno uloženo");
+        Sound.click();
+      }
+    })
+  ]));
+
+  v.appendChild(el("div", { class: "lb-status", id: "lbStatus", text: "Načítám žebříček… 🌐" }));
+  const list = el("div", { id: "lbList" });
+  v.appendChild(list);
+
+  (async () => {
+    const scores = await LB.fetch();
+    if (!scores || !scores.length) {
+      $("#lbStatus").textContent = "Žebříček je zatím prázdný. Dokonči lekci a objevíš se tu! 🌍";
+      return;
+    }
+    const name = (state.playerName || "Hráč").trim();
+    let myIdx = -1;
+    scores.forEach((s, i) => { if (s && s.name === name) myIdx = i; });
+    list.innerHTML = "";
+    scores.forEach((s, i) => {
+      if (i >= 50) return;
+      const rank = i + 1;
+      const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
+      const lang = LANGS[s.lang] || LANGS.ja;
+      const row = el("div", { class: "lb-row" + (s.name === name ? " me" : "") }, [
+        el("div", { class: "lb-rank", text: medal }),
+        el("span", { class: "lb-flag", text: lang.flag }),
+        el("div", { class: "lb-info" }, [
+          el("div", { class: "lb-name", text: s.name + (s.name === name ? " (ty)" : "") }),
+          el("div", { class: "lb-sub", text: "Úroveň " + (s.level || 1) + " · 🔥" + (s.streak || 0) })
+        ]),
+        el("div", { class: "lb-xp", text: (s.xp || 0) + " XP" })
+      ]);
+      list.appendChild(row);
+    });
+    $("#lbStatus").textContent = myIdx >= 0
+      ? "Tvoje pozice: " + (myIdx + 1) + ". místo z " + scores.length + " hráčů 🎉"
+      : "Zatím nejsi v žebříčku. Dokonči lekci a zapoj se! 🚀";
+  })();
+}
+
+/* ---------- PROFIL ---------- */
+function renderProfile() {
+  const v = $("#view");
+  v.innerHTML = "";
+  v.appendChild(el("div", { class: "screen-head" }, [
+    el("span", { class: "icon", text: "🐼" }),
+    el("div", { class: "title", text: "Tvůj profil" })
+  ]));
+  const li = levelInfo(state.xp);
+
+  v.appendChild(el("div", { class: "card" }, [
+    el("div", { class: "sub", style: "margin-bottom:8px" }, "Přezdívka (do žebříčku)"),
+    el("div", { class: "name-row" }, [
+      el("input", {
+        class: "name-input", type: "text", value: state.playerName,
+        placeholder: "Tvoje přezdívka…", maxlength: "16"
+      }),
+      el("button", {
+        class: "btn-save", text: "Uložit", onclick: (e) => {
+          const inp = e.currentTarget.previousSibling;
+          state.playerName = (inp.value || "").trim().slice(0, 16);
+          save(); Sound.click(); toast("✅ Jméno uloženo");
+        }
+      })
+    ])
+  ]));
+  v.appendChild(el("div", { class: "card", style: "text-align:center" }, [
+    el("div", { class: "prof-avatar", text: "🦉" }),
+    el("h2", { text: li.name }),
+    el("div", { class: "sub", text: "Úroveň " + li.level + " · " + state.xp + " XP celkem" }),
+    el("div", { class: "goal-bar", style: "margin-top:8px" }, [el("span", { style: "width:" + (li.into / li.need * 100) + "%" })]),
+    el("div", { class: "sub", style: "margin-top:4px" }, (li.into + " / " + li.need + " XP do další úrovně"))
+  ]));
+
+  const list = el("div", { class: "stat-list" });
+  const stats = [
+    ["🔥 Den za sebou", state.streak],
+    ["🏆 Nejlepší série", state.bestStreak],
+    ["⚡ Nejvyšší kombo", state.maxCombo],
+    ["📚 Dokončené lekce", state.lessons],
+    ["💎 Perfektní lekce", state.perfectLessons],
+    ["🌍 Jazyky vyzkoušeny", Object.keys(state.langsTried).length]
+  ];
+  stats.forEach(([k, val]) =>
+    list.appendChild(el("div", { class: "stat-line" }, [el("span", { class: "k", text: k }), el("span", { class: "v", text: val })])));
+  v.appendChild(list);
+
+  v.appendChild(el("div", { class: "card" }, [
+    el("h2", { text: "Pokrok v jazycích" }),
+    Object.keys(LANGS).forEach(code => {
+      const l = LANGS[code];
+      const done = Object.keys(state.unitDone[code] || {}).length;
+      const pct = Math.round(done / UNITS.length * 100);
+      list.appendChild(el("div", { style: "margin-top:10px" }, [
+        el("div", { class: "stat-line" }, [
+          el("span", { class: "k", text: l.flag + " " + l.name }),
+          el("span", { class: "v", text: done + " / " + UNITS.length + " jednotek" })
+        ]),
+        el("div", { class: "lang-prog-bar" }, [el("span", { style: "width:" + pct + "%" })])
+      ]));
+    })
+  ]));
+}
+
+/* ============================================================
+   LEKCE
+   ============================================================ */
+const Q_LEN = 8;
+let lesson = null;
+let questionState = null;
+
+function wordTarget(w, lang) {
+  if (lang === "ja") return { display: w.ja, sub: w.romaji };
+  return { display: w[lang], sub: "" };
+}
+function promptLang() { return state.lang === "cs" ? "en" : "cs"; }
+
+/* vyber slova pro lekci — preferuj málo zvládnutá */
+function buildPool(unit, count) {
+  let pool = unit.words.slice();
+  const scored = pool.map(w => ({ w, m: getMastery(w.id) }));
+  scored.sort((a, b) => a.m - b.m);
+  pool = scored.map(s => s.w);
+  return pool.slice(0, count);
+}
+
+function otherLabels(w, lang, count, excl) {
+  const unit = UNITS.find(u => u.id === w.cat);
+  const cands = shuffle(unit.words.filter(x => x.id !== w.id));
+  const out = [];
+  const seen = new Set([excl]);
+  for (const c of cands) {
+    const lab = wordTarget(c, lang).display;
+    if (!seen.has(lab)) { seen.add(lab); out.push(c); }
+    if (out.length >= count) break;
+  }
+  while (out.length < count) {
+    const c = pick(ALL_WORDS.filter(x => x.id !== w.id));
+    const lab = wordTarget(c, lang).display;
+    if (!seen.has(lab)) { seen.add(lab); out.push(c); }
+  }
+  return out;
+}
+
+function makeQuestion(w, lang) {
+  const pL = promptLang();
+  const unit = UNITS.find(u => u.id === w.cat);
+  const isKana = !!(unit && unit.kana);
+  const noType = !!(unit && unit.noType);
+  let types;
+  if (isKana) types = ["choice", "reverse", "type"];
+  else {
+    types = ["choice", "reverse", "listening", "listentype", "truefalse"];
+    if (!noType) types.push("type");
+    types.push("speak");
+  }
+  const type = pick(types);
+  const q = { w, lang, type };
+  const target = wordTarget(w, lang);
+
+  if (type === "choice") {
+    const correct = target.display;
+    const others = otherLabels(w, lang, 3, correct).map(o => wordTarget(o, lang).display);
+    q.prompt = "Jak se řekne v " + LANGS[lang].name + "?";
+    q.word = w[pL];
+    q.reading = "";
+    q.options = shuffle([correct].concat(others));
+    q.correct = correct;
+  } else if (type === "reverse") {
+    const correct = w[pL];
+    const others = shuffle(w.cat ? UNITS.find(u => u.id === w.cat).words.filter(x => x.id !== w.id).map(x => x[pL])
+      : []).filter(x => x !== correct).slice(0, 3);
+    q.prompt = "Co znamená:";
+    q.word = target.display;
+    q.reading = target.sub;
+    q.options = shuffle([correct].concat(others));
+    q.correct = correct;
+  } else if (type === "type") {
+    q.prompt = "Napiš v " + LANGS[lang].name + ":";
+    q.word = w[pL];
+    q.reading = "";
+    q.options = [];
+    q.correct = null;
+  } else if (type === "listening") {
+    const correct = w[pL];
+    const others = shuffle(UNITS.find(u => u.id === w.cat).words.filter(x => x.id !== w.id).map(x => x[pL]))
+      .filter(x => x !== correct).slice(0, 3);
+    q.prompt = "Poslouchej a vyber, co slyšíš:";
+    q.word = "";
+    q.reading = "";
+    q.say = target.display;
+    q.options = shuffle([correct].concat(others));
+    q.correct = correct;
+  } else if (type === "listentype") {
+    q.prompt = "Poslouchej a napiš, co slyšíš:";
+    q.word = "";
+    q.reading = "";
+    q.say = target.display;
+    q.options = [];
+    q.correct = null;
+  } else if (type === "speak") {
+    q.prompt = "Vyslov nahlas:";
+    q.word = target.display;
+    q.reading = target.sub;
+    q.say = target.display;
+    q.options = [];
+    q.correct = q.lang === "ja" ? q.w.romaji : q.w[q.lang];
+  } else if (type === "truefalse") {
+    const isTrue = Math.random() < 0.5;
+    const other = isTrue ? w : pick(UNITS.find(u => u.id === w.cat).words.filter(x => x.id !== w.id));
+    q.prompt = "Je to pravda?";
+    q.word = target.display + " → „" + other[pL] + "“";
+    q.reading = target.sub;
+    q.options = ["Ano", "Ne"];
+    q.correct = isTrue ? "Ano" : "Ne";
+  }
+  return q;
+}
+
+function typeAccepted(q, ans) {
+  const w = q.w, lang = q.lang;
+  if (lang === "ja") return isSame(ans, w.ja) || isSame(ans, w.romaji);
+  return isSame(ans, w[lang]);
+}
+
+function startLesson(unit, mode) {
+  Sound.init();
+  lesson = {
+    unit, lang: state.lang, mode,
+    qs: buildPool(unit, Q_LEN).map(w => makeQuestion(w, state.lang)),
+    idx: 0, correct: 0, wrong: 0, xp: 0, combo: 0, maxCombo: 0, failed: false
+  };
+  $("#bottomnav").classList.add("hidden");
+  Mascot.hide();
+  renderLesson();
+}
+function startPractice() {
+  /* smíšená praxe ze všech odemčených slov, žádné XP, +1 srdce */
+  Sound.init();
+  const words = [];
+  UNITS.forEach(u => { if (unitUnlocked(u.id)) words.push(...u.words); });
+  lesson = {
+    unit: null, lang: state.lang, mode: "practice",
+    qs: shuffle(words).slice(0, 6).map(w => makeQuestion(w, state.lang)),
+    idx: 0, correct: 0, wrong: 0, xp: 0, combo: 0, maxCombo: 0, failed: false
+  };
+  $("#bottomnav").classList.add("hidden");
+  Mascot.hide();
+  renderLesson();
+}
+function startDrill(drillType) {
+  /* samostatný trénink: 'listen' nebo 'speak' — všechny otázky daného typu */
+  Sound.init();
+  const words = [];
+  UNITS.forEach(u => { if (unitUnlocked(u.id) && !u.kana) words.push(...u.words); });
+  const qs = [];
+  for (const w of shuffle(words).slice(0, 8)) {
+    const q = makeQuestion(w, state.lang);
+    if (q.type === drillType || (drillType === "listen" && (q.type === "listening" || q.type === "listentype"))) {
+      qs.push(q);
+    } else {
+      q.type = drillType === "listen" ? "listening" : "speak";
+      q.prompt = q.type === "listening" ? "Poslouchej a vyber, co slyšíš:" : "Vyslov nahlas:";
+      q.word = q.type === "listening" ? "" : wordTarget(w, state.lang).display;
+      q.reading = q.type === "listening" ? "" : wordTarget(w, state.lang).sub;
+      q.say = wordTarget(w, state.lang).display;
+      if (q.type === "listening") {
+        const opts = [w[promptLang()]];
+        const cands = shuffle(words.filter(x => x.id !== w.id).map(x => x[promptLang()]));
+        for (const o of cands) { if (opts.indexOf(o) === -1) opts.push(o); if (opts.length >= 4) break; }
+        q.options = opts;
+      } else {
+        q.options = [];
+      }
+      q.correct = q.type === "listening" ? w[promptLang()] : (state.lang === "ja" ? q.w.romaji : q.w[state.lang]);
+      qs.push(q);
+    }
+  }
+  lesson = {
+    unit: null, lang: state.lang, mode: "drill",
+    qs, idx: 0, correct: 0, wrong: 0, xp: 0, combo: 0, maxCombo: 0, failed: false
+  };
+  $("#bottomnav").classList.add("hidden");
+  Mascot.hide();
+  renderLesson();
+}
+
+function renderLesson() {
+  const v = $("#view");
+  const q = lesson.qs[lesson.idx];
+  const total = lesson.qs.length;
+  v.innerHTML = "";
+  const pct = lesson.idx / total * 100;
+
+  const top = el("div", { class: "lesson-top" }, [
+    el("button", { class: "exit-btn", text: "✕", onclick: () => {
+      Sound.click();
+      document.removeEventListener("keydown", window.__slovkoKey);
+      if (confirm("Opravdu chceš odejít z lekce? Postup se neuloží.")) { $("#bottomnav").classList.remove("hidden"); showView("path"); }
+    } }),
+    el("div", { class: "lesson-prog" }, [el("span", { style: "width:" + pct + "%" })]),
+    el("div", { class: "combo-box" },
+      lesson.combo >= 2 ? [el("span", { text: "🔥" }), el("span", { class: "c-num", text: lesson.combo + "×" })] : [el("span", { text: "" })])
+  ]);
+  v.appendChild(top);
+
+  const qcard = el("div", { class: "q-card" }, [
+    el("div", { class: "q-prompter", text: q.prompt })
+  ]);
+  if (q.word) {
+    qcard.appendChild(el("div", { class: "q-word" + (q.lang === "ja" ? " ja" : ""), text: q.word }));
+  }
+  if (q.reading) {
+    qcard.appendChild(el("div", { class: "q-reading", text: q.reading }));
+  }
+  if (q.say) {
+    qcard.appendChild(el("button", { class: "speak-btn", text: "🔊", onclick: (e) => { Sound.click(); Speak.say(q.say, LANGS[q.lang].tts); e.currentTarget.classList.add("speaking"); setTimeout(() => e.currentTarget.classList.remove("speaking"), 1200); } }));
+    setTimeout(() => { Speak.say(q.say, LANGS[q.lang].tts); }, 400);
+  }
+  v.appendChild(qcard);
+
+  const ansGrid = el("div", { class: "answer-grid" + (q.options.length === 2 ? " one-col" : "") });
+  questionState = { selected: null, checked: false };
+  let typeInput = null;
+  const isListenType = q.type === "listentype";
+
+  if (q.type === "type" || isListenType) {
+    typeInput = el("input", {
+      class: "type-input", type: "text",
+      placeholder: isListenType ? "Napiš, co slyšíš…" : "Napiš odpověď…",
+      autocomplete: "off", autocorrect: "off", spellcheck: "false",
+      oninput: (e) => { checkBtn.classList.toggle("ready", e.target.value.trim().length > 0); }
+    });
+    v.appendChild(typeInput);
+    const hintBtn = el("button", {
+      class: "hint-btn",
+      text: isListenType ? "🔁 Přehraj znovu" : "💡 Nápověda",
+      onclick: (e) => {
+        if (isListenType) { Sound.click(); Speak.say(q.say, LANGS[q.lang].tts); }
+        else e.currentTarget.textContent = "Nápověda: " + (q.lang === "ja" ? q.w.romaji : q.w[q.lang]);
+      }
+    });
+    v.appendChild(hintBtn);
+    setTimeout(() => typeInput && typeInput.focus(), 100);
+  } else if (q.type === "speak") {
+    const area = el("div", { class: "speak-area" });
+    const msg = el("div", { class: "speak-msg" });
+    let repeatBtns = null;
+    function showRepeat() {
+      if (repeatBtns) { repeatBtns.style.display = ""; return; }
+      msg.className = "speak-msg";
+      msg.textContent = "Poslechni si výslovnost a opakuj nahlas.";
+      repeatBtns = el("div", { class: "drill-row", style: "width:100%" });
+      const okBtn = el("button", { class: "drill-card green", html: "<div class='d-ico'>✅</div><div class='d-name'>Zvládám</div>", onclick: () => finishSpeak(true) });
+      const againBtn = el("button", { class: "drill-card blue", html: "<div class='d-ico'>🔁</div><div class='d-name'>Ještě jednou</div>", onclick: () => { Sound.click(); Speak.say(q.say, LANGS[q.lang].tts); } });
+      const noBtn = el("button", { class: "drill-card pink", html: "<div class='d-ico'>😅</div><div class='d-name'>Nevím</div>", onclick: () => finishSpeak(false) });
+      repeatBtns.appendChild(okBtn); repeatBtns.appendChild(againBtn); repeatBtns.appendChild(noBtn);
+      area.appendChild(repeatBtns);
+    }
+    area.appendChild(msg);
+    if (Recog.available) {
+      const mic = el("button", { class: "mic-btn", text: "🎤", onclick: () => {
+        if (questionState.checked) return;
+        msg.className = "speak-msg listening";
+        msg.textContent = "Poslouchám… 🎧";
+        mic.classList.add("listening"); mic.disabled = true;
+        const ok = Recog.listen(LANGS[q.lang].tts, (texts) => {
+          mic.disabled = false; mic.classList.remove("listening");
+          const hit = Recog.match(texts, q.w, q.lang);
+          if (hit) {
+            msg.className = "speak-msg ok";
+            msg.textContent = "Skvělé, slyšel jsem to! 🎉";
+            Recog.stop();
+            setTimeout(() => finishSpeak(true), 300);
+          } else {
+            msg.className = "speak-msg no";
+            msg.textContent = "Zkus to znovu. Slyšel jsem: „" + texts[0] + "“";
+          }
+        }, () => {
+          mic.disabled = false; mic.classList.remove("listening");
+          msg.className = "speak-msg no";
+          msg.textContent = "Mikrofon tě neslyšel. Zkus to znovu.";
+        });
+        if (!ok) { mic.disabled = false; mic.classList.remove("listening"); msg.textContent = "Mikrofon není dostupný. Použij tlačítka níže."; }
+      } });
+      area.appendChild(mic);
+      area.appendChild(el("div", { class: "speak-hint", text: "Stiskni 🎤 a řekni slovo nahlas. Mikrofon tě pozná." }));
+    }
+    showRepeat();
+    v.appendChild(area);
+  } else {
+    q.options.forEach(opt => {
+      const b = el("button", { class: "answer-btn", text: opt, onclick: (e) => {
+        if (questionState.checked) return;
+        Sound.click();
+        questionState.selected = opt;
+        $$(".answer-btn", v).forEach(x => x.classList.remove("sel"));
+        e.currentTarget.classList.add("sel");
+        checkBtn.classList.add("ready");
+        checkBtn.classList.remove("disabled");
+      } });
+      ansGrid.appendChild(b);
+    });
+    v.appendChild(ansGrid);
+  }
+
+  const fb = el("div", { class: "fb hidden" });
+  v.appendChild(fb);
+
+  const bottom = el("div", { class: "lesson-bottom" });
+  const checkBtn = el("button", {
+    class: "btn-check",
+    text: "Kontrola",
+    style: q.type === "speak" ? "display:none" : "",
+    onclick: () => {
+      if (questionState.checked) return;
+      let ans;
+      if (q.type === "type" || q.type === "listentype") ans = typeInput.value;
+      else ans = questionState.selected;
+      if (ans === null || ans === undefined || (typeof ans === "string" && !ans.trim())) return;
+      checkAnswer(q, ans, typeInput, ansGrid, fb, checkBtn, v);
+    }
+  });
+  bottom.appendChild(checkBtn);
+  v.appendChild(bottom);
+
+  function finishSpeak(ok) {
+    Recog.stop();
+    if (questionState.checked) return;
+    checkAnswer(q, ok ? q.correct : "__NEVIM__", null, null, fb, checkBtn, v);
+    checkBtn.style.display = "";
+  }
+
+  const onKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); checkBtn.click(); }
+  };
+  document.addEventListener("keydown", onKey);
+  window.__slovkoKey = onKey;
+}
+
+function checkAnswer(q, ans, typeInput, ansGrid, fb, checkBtn, v) {
+  questionState.checked = true;
+  let ok = false;
+  if (q.type === "type" || q.type === "listentype") ok = typeAccepted(q, ans);
+  else ok = ans === q.correct;
+
+  const correctText = (q.type === "type" || q.type === "listentype")
+    ? (q.lang === "ja" ? q.w.ja + " (" + q.w.romaji + ")" : q.w[q.lang])
+    : (q.type === "speak" ? (q.lang === "ja" ? q.w.ja + " (" + q.w.romaji + ")" : q.w[q.lang]) : q.correct);
+
+  if (ok) {
+    lesson.combo++;
+    lesson.maxCombo = Math.max(lesson.maxCombo, lesson.combo);
+    lesson.correct++;
+    if (q.type === "speak") state.speakCount++;
+    if (q.type === "listening" || q.type === "listentype") state.listenCount++;
+    const mult = Math.min(1 + (lesson.combo - 1) * 0.05, 2);
+    const gain = lesson.mode === "practice" ? 0 : Math.round(10 * mult);
+    lesson.xp += gain;
+    setMastery(q.w.id, getMastery(q.w.id) + 1);
+    Sound.correct(lesson.combo);
+    fb.className = "fb ok";
+    fb.innerHTML = "Správně!" + (lesson.mode === "lesson" ? ' <span class="fb-correct">+' + gain + " XP</span>" : "");
+    if (lesson.mode === "lesson" && gain > 0) flyXp("+" + gain + " XP");
+    if (q.type === "type" || q.type === "listentype") typeInput.classList.add("correct");
+    else $$(".answer-btn", v).forEach(b => { if (b.textContent === ans) b.classList.add("correct"); });
+  } else {
+    lesson.combo = 0;
+    lesson.wrong++;
+    setMastery(q.w.id, Math.max(0, getMastery(q.w.id) - 1));
+    Sound.wrong();
+    fb.className = "fb no";
+    fb.innerHTML = "Skoro! Správně: <span class='fb-correct'>" + correctText + "</span>";
+    if (q.type === "type" || q.type === "listentype") typeInput.classList.add("wrong");
+    else $$(".answer-btn", v).forEach(b => { if (b.textContent === q.correct) b.classList.add("correct"); });
+    if (lesson.mode === "lesson") {
+      state.hearts = Math.max(0, state.hearts - 1);
+      if (state.hearts < 5 && !state.heartsRegenAt) state.heartsRegenAt = Date.now() + 30 * 60 * 1000;
+      renderTop();
+      if (state.hearts <= 0) {
+        lesson.failed = true;
+        fb.innerHTML = "Došla ti srdíčka! 💔";
+        document.removeEventListener("keydown", window.__slovkoKey);
+        checkBtn.style.display = "none";
+        setTimeout(() => endLesson(), 1400);
+        return;
+      }
+    }
+  }
+
+  checkBtn.className = "btn-continue";
+  checkBtn.textContent = "Pokračovat →";
+  checkBtn.onclick = () => {
+    document.removeEventListener("keydown", window.__slovkoKey);
+    lesson.idx++;
+    renderTop();
+    if (lesson.idx >= lesson.qs.length) endLesson();
+    else renderLesson();
+  };
+}
+
+function endLesson() {
+  const success = !lesson.failed && lesson.idx >= lesson.qs.length;
+  if (success) {
+    addXp(lesson.xp);
+    if (lesson.mode === "lesson") {
+      state.lessons++;
+      if (lesson.wrong === 0) state.perfectLessons++;
+      state.maxCombo = Math.max(state.maxCombo, lesson.maxCombo);
+      state.langsTried[state.lang] = (state.langsTried[state.lang] || 0) + 1;
+
+      /* streak */
+      const today = dateStr();
+      if (state.lastPlay !== today) {
+        if (state.lastPlay === yesterdayStr()) state.streak++;
+        else state.streak = 1;
+        state.lastPlay = today;
+      }
+      state.bestStreak = Math.max(state.bestStreak, state.streak);
+
+      if (lesson.unit) {
+        completeUnit(lesson.unit.id);
+        if (lesson.wrong === 0) toast("💎 Perfektní lekce!");
+      }
+    } else if (lesson.mode === "practice") {
+      const prev = state.hearts;
+      state.hearts = Math.min(5, state.hearts + 1);
+      renderTop();
+      if (state.hearts > prev) { toast("❤️ Získal jsi srdce!"); Sound.heart(); }
+    }
+    if (lesson.mode !== "practice" && lesson.xp >= 10) Confetti.burst(90);
+  }
+  checkAchievements();
+  if (success && lesson.xp > 0) LB.sync();
+  renderResult(success);
+}
+
+function addXp(n) {
+  const before = levelInfo(state.xp).level;
+  state.xp += n;
+  state.dailyXp += n;
+  const after = levelInfo(state.xp).level;
+  if (after > before) { Sound.levelup(); Confetti.burst(160); toast("🎉 Level UP! Jsi " + levelInfo(state.xp).name + "!"); }
+  if (state.dailyXp >= state.dailyGoal) { toast("🎯 Denní cíl splněn! Šampion!"); }
+  save();
+  renderTop();
+}
+
+function renderResult(success) {
+  const v = $("#view");
+  $("#bottomnav").classList.remove("hidden");
+  v.innerHTML = "";
+
+  if (success) {
+    Mascot.mood(lesson.wrong === 0 ? "🤩" : "😊");
+    Mascot.say(lesson.wrong === 0 ? "PERFEKTNÍ! Nezastavitelný!" : "Skvělé! Jde ti to!", 4000);
+    v.appendChild(el("div", { class: "result-wrap" }, [
+      el("div", { class: "result-owl", text: lesson.wrong === 0 ? "🏆" : "🦉" }),
+      el("div", { class: "result-title", text: lesson.wrong === 0 ? "Perfektní!" : (lesson.mode === "drill" ? "Trénink dokončen!" : "Lekce dokončena!") }),
+      el("div", { class: "result-sub", text: LANGS[state.lang].flag + " " + LANGS[state.lang].name }),
+      el("div", { class: "xp-earned", text: lesson.mode === "practice" ? "❤️ +1 srdce" : "+" + lesson.xp + " XP" }),
+      el("div", { class: "stat-row" }, [
+        el("div", { class: "stat-box" }, [el("div", { class: "num", text: lesson.correct }), el("div", { class: "lbl", text: "Správně" })]),
+        el("div", { class: "stat-box" }, [el("div", { class: "num", text: lesson.wrong }), el("div", { class: "lbl", text: "Chybně" })]),
+        el("div", { class: "stat-box" }, [el("div", { class: "num", text: "🔥" + lesson.maxCombo }), el("div", { class: "lbl", text: "Kombo" })])
+      ]),
+      el("button", { class: "btn-big", text: "Pokračovat 🚀", onclick: () => { Sound.click(); showView("path"); } })
+    ]));
+  } else {
+    Mascot.mood("😢");
+    Mascot.say("Srdíčka došla… ale nevzdávej to! Procvič a vrať se silnější.", 5000);
+    Sound.fail();
+    v.appendChild(el("div", { class: "result-wrap" }, [
+      el("div", { class: "result-owl", text: "💔" }),
+      el("div", { class: "result-title", text: "Došla srdíčka" }),
+      el("div", { class: "result-sub", text: "Nezoufej! Procvičování ti vrátí srdce a pomůže si vzpomenout." }),
+      el("div", { class: "xp-earned", text: "Vydělal jsi ale +" + lesson.xp + " XP" }),
+      el("button", { class: "btn-big ghost", text: "🎯 Procvičit a získat ❤️", onclick: () => { Sound.click(); startPractice(); } }),
+      el("button", { class: "btn-big violet", text: "Zkusit znovu 🔄", onclick: () => { Sound.click(); if (lesson.unit) startLesson(lesson.unit, "lesson"); else startPractice(); } }),
+      el("button", { class: "btn-big ghost", text: "Zpět na cestu", onclick: () => { Sound.click(); showView("path"); } })
+    ]));
+  }
+  save();
+}
+
+/* ---------- úspěchy ---------- */
+function checkAchievements() {
+  let any = false;
+  ACHIEVEMENTS.forEach(a => {
+    if (state.achievements[a.id]) return;
+    if (achValue(a.track) >= a.goal) {
+      state.achievements[a.id] = true;
+      any = true;
+      toast(a.ico + " Úspěch: " + a.name + "!");
+    }
+  });
+  if (any) { Sound.fanfare(); Confetti.burst(140); }
+  save();
+}
+
+/* ---------- init ---------- */
+function init() {
+  loadState();
+  ensureUnlocks();
+  renderTop();
+  $("#musicBtn").classList.toggle("off", !state.music);
+  $("#musicIco").textContent = state.music ? "🎵" : "🔇";
+  showView("path");
+  Speak.load();
+
+  /* hudba: spustí se po první interakci (autoplay pravidla) */
+  const startMusic = () => {
+    if (state.music) Music.start();
+    window.removeEventListener("pointerdown", startMusic);
+  };
+  window.addEventListener("pointerdown", startMusic, { once: true });
+
+  /* srdce — kontrola každých 30 s */
+  setInterval(() => {
+    const prev = state.hearts;
+    catchUpHearts();
+    if (state.hearts !== prev) { renderTop(); save(); if (state.hearts > prev) toast("❤️ +1 srdce"); }
+  }, 30000);
+
+  if (state.lessons === 0) {
+    setTimeout(() => {
+      Mascot.say("Ahoj! Jsem Sova a budu tě učit jazyky. Vyber jazyk a jedeme! 🚀", 6000);
+    }, 600);
+  } else {
+    setTimeout(() => { Mascot.say("Vítej zpět! Pokračuj ve své sérii! 🔥", 4000); }, 600);
+  }
+  save();
+}
+
+init();
+
+/* ladění / testy */
+window.__slovko = {
+  get state() { return state; },
+  get lesson() { return lesson; },
+  get q() { return lesson ? lesson.qs[lesson.idx] : null; }
+};
