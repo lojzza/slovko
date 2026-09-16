@@ -48,20 +48,21 @@ body{
 }
 .top-pill,.xp-pill{
   display:flex;align-items:center;gap:5px;background:#fff;border:none;
-  border-radius:999px;padding:6px 12px;font-weight:800;font-size:15px;
+  border-radius:14px;padding:7px 11px;font-weight:800;font-size:15px;
   box-shadow:var(--shadow-sm);cursor:pointer;color:var(--ink);
+  line-height:1;white-space:nowrap;flex-shrink:0;
 }
-.top-pill .pill-ico{font-size:15px}
-.top-pill.music{width:38px;justify-content:center;padding:6px 8px}
+.top-pill .pill-ico{font-size:15px;line-height:1}
+.top-pill.music{width:38px;height:38px;justify-content:center;padding:0;border-radius:50%}
 .top-pill.music span{font-size:17px}
 .top-pill.music.off{opacity:.45;filter:grayscale(.8)}
 .hearts{color:var(--red)}
 .xp-pill{
-  margin-left:auto;flex-direction:column;align-items:stretch;gap:2px;
-  padding:6px 12px 8px;min-width:96px;position:relative;
+  margin-left:auto;flex-direction:column;align-items:stretch;gap:3px;
+  padding:7px 11px 8px;min-width:98px;position:relative;
 }
-.xp-stack{display:flex;justify-content:space-between;align-items:baseline;width:100%}
-.xp-level{font-size:10px;color:var(--ink-soft);font-weight:800}
+.xp-stack{display:flex;justify-content:space-between;align-items:baseline;width:100%;gap:6px}
+.xp-level{font-size:10px;color:var(--ink-soft);font-weight:800;white-space:nowrap}
 .xp-bar{height:6px;background:#eee3ff;border-radius:99px;overflow:hidden;width:100%}
 .xp-bar span{display:block;height:100%;width:0%;border-radius:99px;
   background:linear-gradient(90deg,#f59e0b,#ff6b6b);transition:width .6s cubic-bezier(.2,.8,.2,1)}
@@ -142,6 +143,7 @@ body{
 .speak-btn{
   border:none;background:#6c5ce7;color:#fff;width:44px;height:44px;border-radius:50%;
   font-size:20px;cursor:pointer;box-shadow:var(--shadow-sm);margin-top:6px;transition:.15s;
+  display:inline-grid;place-items:center;flex-shrink:0;padding:0;line-height:1;
 }
 .speak-btn:active{transform:scale(.9)}
 .speak-btn.speaking{animation:pulse 1s infinite}
@@ -319,6 +321,7 @@ body{
 .mic-btn{
   border:none;background:var(--primary);color:#fff;width:76px;height:76px;border-radius:50%;
   font-size:32px;cursor:pointer;box-shadow:0 6px 0 var(--primary-dark);transition:.12s;
+  display:inline-grid;place-items:center;flex-shrink:0;padding:0;line-height:1;
 }
 .mic-btn:active{transform:translateY(3px);box-shadow:0 3px 0 var(--primary-dark)}
 .mic-btn.listening{background:#e84393;animation:pulse 1.2s infinite}
@@ -443,4 +446,12 @@ body{
 @media (max-width:420px){
   .q-word{font-size:28px}
   .answer-grid{grid-template-columns:1fr}
+}
+@media (max-width:390px){
+  .logo-text{display:none}
+  #topbar{gap:5px;padding:8px 8px}
+  .top-pill{padding:6px 9px;font-size:14px}
+  .xp-pill{min-width:88px;padding:6px 9px 7px}
+  .nav-btn .nav-ico{font-size:19px}
+  .nav-btn span:last-child{font-size:10px}
 }

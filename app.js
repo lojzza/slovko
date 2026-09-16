@@ -184,11 +184,6 @@ const Music = (() => {
     [240,76,4],[244,74,4],[248,72,4],[252,71,8]
   ];
 
-  function ac() {
-    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === "suspended") ctx.resume();
-    return ctx;
-  }
   function noise(ctx, len) {
     if (!noiseBuf) {
       noiseBuf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate);
@@ -345,6 +340,18 @@ const Speak = (() => {
     refreshVoices();
     try { speechSynthesis.onvoiceschanged = refreshVoices; } catch (e) {}
   }
+  function warm() {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      refreshVoices();
+      if (speechSynthesis.paused) speechSynthesis.resume();
+      if (voices.length === 0) {
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0; u.rate = 3;
+        speechSynthesis.speak(u);
+      }
+    } catch (e) {}
+  }
   function say(text, lang, onDone) {
     if (!("speechSynthesis" in window)) { if (onDone) onDone(false); return false; }
     try {
@@ -356,25 +363,29 @@ const Speak = (() => {
       const want = (lang || "ja-JP").toLowerCase();
       const v = voices.find(v => (v.lang || "").toLowerCase() === want) || voices[0];
       if (v) u.voice = v;
-      u.onerror = () => { if (onDone) onDone(false); };
-      u.onend = () => { if (onDone) onDone(true); };
+      let settled = false;
+      u.onerror = () => { if (!settled) { settled = true; if (onDone) onDone(false); } };
+      u.onend = () => { if (!settled) { settled = true; if (onDone) onDone(true); } };
       if (speechSynthesis.paused) speechSynthesis.resume();
       speechSynthesis.speak(u);
       return true;
     } catch (e) { if (onDone) onDone(false); return false; }
   }
-  return { init, say, refreshVoices };
+  return { init, say, warm, refreshVoices };
 })();
 
-/* přehraje slovo + při selhání TTS ukáže foneticky */
+/* přehraje slovo + při selhání TTS ukáže foneticky (watchdog) */
 function playWord(text, lang, btn) {
-  const fallback = () => toast("🔊 Výslovnost: " + text);
-  const ok = Speak.say(text, lang, (worked) => {
+  let done = false;
+  const finish = (ok) => {
+    if (done) return; done = true;
     if (btn) btn.classList.remove("speaking");
-    if (!worked) fallback();
-  });
+    if (!ok) toast("🔊 Výslovnost: " + text);
+  };
+  const ok = Speak.say(text, lang, finish);
   if (btn) btn.classList.add("speaking");
-  if (!ok) fallback();
+  if (!ok) finish(false);
+  setTimeout(() => finish(false), 4000);
 }
 
 /* ---------- rozpoznávání řeči (výslovnost) ---------- */
@@ -1793,8 +1804,10 @@ function init() {
   Speak.init();
   if (!state.user) setTimeout(() => Auth.showLogin(), 400);
 
-  /* hudba: spustí se po první interakci (autoplay pravidla) */
+  /* hudba + zvuk: spustí se po první interakci (autoplay pravidla) */
   const startMusic = () => {
+    Sound.init();
+    Speak.warm();
     if (state.music) Music.start();
     window.removeEventListener("pointerdown", startMusic);
   };
@@ -1823,5 +1836,7 @@ init();
 window.__slovko = {
   get state() { return state; },
   get lesson() { return lesson; },
-  get q() { return lesson ? lesson.qs[lesson.idx] : null; }
+  get q() { return lesson ? lesson.qs[lesson.idx] : null; },
+  music: Music,
+  speak: Speak
 };
