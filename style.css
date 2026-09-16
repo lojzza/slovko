@@ -325,7 +325,63 @@ body{
 .mic-btn:disabled{opacity:.5;cursor:not-allowed}
 .speak-hint{font-size:12px;color:var(--ink-soft);font-weight:700}
 
-/* ---------- ŽEBŘÍČEK ---------- */
+/* ---------- LOGIN ---------- */
+.login-overlay{
+  position:fixed;inset:0;z-index:100;display:grid;place-items:center;
+  background:linear-gradient(160deg,var(--bg1),var(--bg2) 55%,var(--bg3));
+  padding:20px;
+}
+.login-card{
+  background:#fff;border-radius:26px;box-shadow:var(--shadow);padding:26px 22px;
+  width:100%;max-width:360px;text-align:center;animation:pop .4s;
+}
+.login-owl{font-size:64px;animation:floaty 3s ease-in-out infinite}
+.login-card h2{
+  font-size:26px;font-weight:900;margin:4px 0 2px;
+  background:linear-gradient(90deg,var(--primary),#e84393);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.login-stay{display:flex;align-items:center;gap:6px;font-weight:800;font-size:13px;color:var(--ink-soft);margin:6px 0}
+.login-stay input{width:18px;height:18px;accent-color:var(--primary)}
+.login-err{color:#c0392b;font-weight:800;font-size:13px;min-height:18px;margin-bottom:6px}
+.login-card .btn-big{margin-top:8px}
+
+/* ---------- STUDIUM (před testem) ---------- */
+.study-card{
+  perspective:1000px;min-height:300px;cursor:pointer;user-select:none;
+}
+.study-inner{position:relative;width:100%;height:100%;transition:transform .5s;transform-style:preserve-3d}
+.study-card.flipped .study-inner{transform:rotateY(180deg)}
+.study-face{
+  position:absolute;inset:0;backface-visibility:hidden;border-radius:22px;
+  background:#fff;box-shadow:var(--shadow);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;
+}
+.study-face.back{transform:rotateY(180deg);background:linear-gradient(160deg,#fff,var(--bg2))}
+.study-word{font-size:40px;font-weight:900;word-break:break-word}
+.study-word.ja{font-size:46px}
+.study-read{font-size:18px;color:var(--ink-soft);font-weight:800}
+.study-trans{font-size:22px;font-weight:900}
+.study-hint{font-size:13px;color:var(--ink-soft);font-weight:700}
+.study-dots{display:flex;gap:6px;justify-content:center;margin:12px 0}
+.study-dot{width:9px;height:9px;border-radius:99px;background:#ddd;transition:.3s}
+.study-dot.on{background:var(--primary);transform:scale(1.25)}
+
+/* ---------- DENNÍ SLOVO (krabička) ---------- */
+.crate-overlay{
+  position:fixed;inset:0;z-index:95;display:grid;place-items:center;
+  background:rgba(45,42,61,.6);backdrop-filter:blur(4px);padding:20px;
+}
+.crate-card{background:#fff;border-radius:26px;padding:26px;text-align:center;max-width:360px;width:100%;box-shadow:var(--shadow);animation:pop .35s}
+.crate-box{font-size:90px;animation:crateShake .9s ease infinite;cursor:pointer}
+.crate-box.opening{animation:none}
+@keyframes crateShake{0%,100%{transform:rotate(-4deg) scale(1)}50%{transform:rotate(4deg) scale(1.06)}}
+.crate-reveal{animation:pop .5s}
+.crate-word{font-size:44px;font-weight:900;word-break:break-word;margin-top:10px}
+.crate-word.ja{font-size:50px}
+.crate-read{font-size:18px;color:var(--ink-soft);font-weight:800}
+.crate-trans{font-size:22px;font-weight:900;margin-top:6px}
+.crate-xp{color:var(--amber);font-weight:900;font-size:18px;margin-top:8px}
 .lb-status{text-align:center;padding:20px;color:var(--ink-soft);font-weight:800;font-size:14px}
 .lb-row{
   display:flex;align-items:center;gap:10px;background:#fff;border-radius:14px;padding:10px 14px;
@@ -351,6 +407,38 @@ body{
   font-weight:900;font-size:14px;cursor:pointer;box-shadow:0 4px 0 var(--green-dark);font-family:inherit;
 }
 .btn-save:active{transform:translateY(2px);box-shadow:0 2px 0 var(--green-dark)}
+
+/* ---------- AI CHAT ---------- */
+.chat{display:flex;flex-direction:column;gap:10px;background:rgba(255,255,255,.55);border-radius:18px;padding:12px;margin-bottom:10px;min-height:260px;max-height:46vh;overflow-y:auto}
+.chat-msg{display:flex;align-items:flex-end;gap:6px}
+.chat-msg.user{justify-content:flex-end}
+.chat-bubble{
+  max-width:82%;padding:10px 14px;border-radius:16px;font-size:14px;font-weight:700;line-height:1.4;
+  animation:pop .25s;word-break:break-word;
+}
+.chat-msg.assistant .chat-bubble{background:#fff;border:2px solid #eee;border-bottom-left-radius:4px}
+.chat-msg.user .chat-bubble{background:var(--primary);color:#fff;border-bottom-right-radius:4px}
+.chat-bubble.typing{color:var(--ink-soft);animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+.chat-input-row{display:flex;gap:8px;align-items:center}
+
+/* ---------- klikací sova ---------- */
+#mascot.clickable{pointer-events:auto;cursor:pointer}
+#mascot.clickable .mascot-face{animation:bounce 1s ease infinite}
+
+/* ---------- SPARKLE (klikový efekt) ---------- */
+.sparkle{position:fixed;z-index:85;pointer-events:none;font-size:14px;animation:sparkleFly .6s ease-out forwards}
+@keyframes sparkleFly{
+  0%{opacity:1;transform:translate(0,0) scale(.6)}
+  100%{opacity:0;transform:translate(var(--sx),var(--sy)) scale(1.3)}
+}
+/* plynulý přechod obrazovek */
+#view{animation:viewIn .35s ease}
+@keyframes viewIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+/* srdce při ztrátě */
+.top-pill.hearts .pill-ico{transition:.2s}
+.top-pill.hearts.lose{animation:heartPop .4s}
+@keyframes heartPop{0%{transform:scale(1)}40%{transform:scale(1.5)}100%{transform:scale(1)}}
 
 @media (max-width:420px){
   .q-word{font-size:28px}

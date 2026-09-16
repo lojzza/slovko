@@ -134,55 +134,181 @@ const Confetti = (() => {
   return { burst };
 })();
 
-/* ---------- pozadí hudba (procedurální smyčka) ---------- */
+/* ---------- pozadí hudba (procedurální skladba, ~100 s) ---------- */
 const Music = (() => {
-  let ctx = null, timer = null, on = false, step = 0, chordIdx = 0, nextTime = 0;
-  const TICK = 0.5;
-  const chords = [
-    [48, 55, 60, 64],   /* Cmaj */
-    [50, 55, 59, 62],   /* Dm7 */
-    [52, 59, 62, 67],   /* Gmaj */
-    [47, 54, 59, 62]    /* Bb/A */
+  let ctx = null, timer = null, on = false, startTime = 0, nextStep = 0, noiseBuf = null, master = null;
+  const TICK = 0.15;          /* šestnáctina @ 100 BPM */
+  const TOTAL = 256;          /* 16 taktů × 16 kroků */
+  const ROOTS = [45, 41, 48, 43];   /* Am F C G */
+  const TRIADS = { 45:[57,60,64], 41:[53,57,60], 48:[55,60,64], 43:[55,59,62] };
+  const midi = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  function ac() {
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      master = ctx.createGain();
+      master.gain.value = 1;
+      master.connect(ctx.destination);
+    }
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+  function out(g) { g.connect(master); }
+  function duck(v) {
+    if (!master) return;
+    const t = master.context.currentTime;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.linearRampToValueAtTime(v, t + 0.25);
+  }
+
+  /* melodie — 8 taktů (sloka) */
+  const MEL = [
+    [0,64,4],[4,69,4],[8,72,4],[12,71,4],
+    [16,69,4],[20,72,4],[24,69,4],[28,67,4],
+    [32,74,4],[36,74,2],[38,72,2],[40,72,4],[44,67,4],
+    [48,71,4],[52,74,4],[56,71,4],[60,67,4],
+    [64,72,4],[68,71,4],[72,69,4],[76,64,4],
+    [80,67,4],[84,69,4],[88,72,4],[92,69,4],
+    [96,74,4],[100,72,4],[104,76,4],[108,74,4],
+    [112,71,4],[116,69,4],[120,67,4],[124,71,4]
   ];
-  const arp = [0, 1, 2, 3, 2, 1];
-  const keys = { "c3":130.81, "d3":146.83, "e3":164.81, "f3":174.61, "g3":196.00, "a3":220.00, "b3":246.94,
-                 "c4":261.63, "d4":293.66, "e4":329.63, "f4":349.23, "g4":392.00, "a4":440.00, "b4":493.88, "c5":523.25 };
+  /* variace pro refrén (takt 8–13) */
+  const MEL2 = [
+    [128,72,2],[130,71,2],[132,69,4],[136,72,4],[140,76,4],[144,74,2],[146,72,2],[148,71,4],
+    [152,69,4],[156,72,4],[160,67,4],[164,69,4],[168,72,4],[172,74,4],
+    [176,76,4],[180,74,4],[184,72,4],[188,69,4],
+    [192,72,4],[196,74,4],[200,72,4],[204,69,4],
+    [208,76,4],[212,74,4],[216,72,4],[220,74,4],
+    [224,71,4],[228,72,4],[232,74,4],[236,72,4],
+    [240,76,4],[244,74,4],[248,72,4],[252,71,8]
+  ];
+
   function ac() {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === "suspended") ctx.resume();
     return ctx;
   }
-  function tone(freq, t, dur, type, vol, lp) {
-    const c = ac();
-    const o = c.createOscillator(), g = c.createGain();
-    o.type = type; o.frequency.value = freq;
-    if (lp) {
-      const f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = lp;
-      o.connect(f); f.connect(g);
-    } else o.connect(g);
-    g.gain.setValueAtTime(0, c.currentTime + t);
-    g.gain.linearRampToValueAtTime(vol, c.currentTime + t + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + t + dur);
-    g.connect(c.destination);
-    o.start(c.currentTime + t); o.stop(c.currentTime + t + dur + 0.05);
+  function noise(ctx, len) {
+    if (!noiseBuf) {
+      noiseBuf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    return noiseBuf;
   }
-  function midi(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+  function env(c, t, vol, dur, filt) {
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let node = g;
+    if (filt) {
+      const f = c.createBiquadFilter();
+      f.type = "lowpass"; f.frequency.value = filt;
+      node.connect(f); f.connect(g);
+      return f;
+    }
+    return node;
+  }
+  function playVoice(e, t) {
+    const c = ac();
+    const kind = e[7];
+    if (kind === "kick") {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(150, t);
+      o.frequency.exponentialRampToValueAtTime(45, t + 0.14);
+      g.gain.setValueAtTime(0.28, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      o.connect(g); out(g);
+      o.start(t); o.stop(t + 0.2);
+    } else if (kind === "clap") {
+      const s = c.createBufferSource(); s.buffer = noise(c, 0.15);
+      const f = c.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 1900; f.Q.value = 0.8;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+      s.connect(f); f.connect(g); out(g);
+      s.start(t); s.stop(t + 0.15);
+    } else if (kind === "hat") {
+      const s = c.createBufferSource(); s.buffer = noise(c, 0.05);
+      const f = c.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 6500;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.05, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+      s.connect(f); f.connect(g); out(g);
+      s.start(t); s.stop(t + 0.06);
+    } else {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = kind === "mel" ? "triangle" : (kind === "bass" ? "triangle" : "sine");
+      o.frequency.value = e[2];
+      const dur = e[5];
+      if (kind === "pad") {
+        const f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 700; f.Q.value = 0.4;
+        o.connect(f); f.connect(g);
+      } else o.connect(g);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(e[3], t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      out(g);
+      o.start(t); o.stop(t + dur + 0.05);
+    }
+  }
+  const events = (() => {
+    const ev = [];
+    for (let bar = 0; bar < 16; bar++) {
+      const base = bar * 16;
+      const root = ROOTS[bar % 4];
+      const tri = TRIADS[root];
+      const chorus = bar >= 8 && bar < 14;
+      const body = bar >= 2 && bar < 14;
+      /* pad */
+      tri.forEach(n => ev.push([base, 0.03, midi(n), 0.045, "sine", 6.4, 700, "pad"]));
+      if (bar >= 14) ev.push([base + 8, 0.03, midi(tri[0]), 0.04, "sine", 4, 700, "pad"]);
+      /* basa */
+      if (body) {
+        ev.push([base + 0, 0.02, midi(root - 12), 0.08, "triangle", 1.4, 350, "bass"]);
+        ev.push([base + 8, 0.02, midi(root - 12), 0.08, "triangle", 1.4, 350, "bass"]);
+        ev.push([base + 12, 0.02, midi(root - 7), 0.05, "triangle", 0.8, 350, "bass"]);
+      }
+      /* bubny */
+      if (bar >= 2 && bar < 15) {
+        ev.push([base + 0, 0, 0, 0, 0, 0, 0, "kick"]);
+        ev.push([base + 8, 0, 0, 0, 0, 0, 0, "kick"]);
+      }
+      if (bar >= 4 && bar < 14) {
+        ev.push([base + 4, 0, 0, 0, 0, 0, 0, "clap"]);
+        ev.push([base + 12, 0, 0, 0, 0, 0, 0, "clap"]);
+      }
+      if (bar >= 3 && bar < 15) {
+        for (let s = 2; s < 16; s += 2) ev.push([base + s, 0, 0, 0, 0, 0, 0, "hat"]);
+      }
+      /* melodie */
+      const mel = bar < 8 ? MEL : MEL2;
+      for (const m of mel) {
+        if (m[0] >= base && m[0] < base + 16) ev.push([m[0], 0.02, midi(m[1]), 0.09, "mel", m[2] * TICK, 0, "mel"]);
+      }
+    }
+    ev.sort((a, b) => a[0] - b[0]);
+    return ev;
+  })();
+
   function schedule() {
     if (!on) return;
     const c = ac();
-    while (nextTime < c.currentTime + 0.4) {
-      const ch = chords[chordIdx];
-      const rel = step / 8;
-      if (rel === 0) {
-        ch.forEach(n => tone(midi(n), nextTime - c.currentTime, 6, "sine", 0.045, 700));
-        tone(midi(ch[0] - 12), nextTime - c.currentTime, 5, "triangle", 0.05, 400);
+    const ahead = c.currentTime - startTime + 0.5;
+    while (nextStep < TOTAL && nextStep * TICK < ahead) {
+      const t = startTime + nextStep * TICK;
+      for (const e of events) {
+        if (e[0] === nextStep) { try { playVoice(e, t); } catch (err) {} }
+        else if (e[0] > nextStep) break;
       }
-      const ar = arp[step % arp.length];
-      tone(midi(ch[ar % ch.length] + 12), nextTime - c.currentTime, 0.8, "triangle", 0.045);
-      if (step % 4 === 2) tone(midi(ch[0] + 24), nextTime - c.currentTime, 0.6, "sine", 0.03);
-      step++;
-      if (step % 8 === 0) { chordIdx = (chordIdx + 1) % chords.length; }
-      nextTime += TICK;
+      nextStep++;
+    }
+    if (nextStep >= TOTAL && c.currentTime - startTime > TOTAL * TICK - 0.2) {
+      startTime = c.currentTime + 0.1;
+      nextStep = 0;
     }
   }
   function start() {
@@ -190,9 +316,10 @@ const Music = (() => {
     on = true;
     try {
       ac();
-      nextTime = ctx.currentTime + 0.1;
+      startTime = ctx.currentTime + 0.1;
+      nextStep = 0;
       if (timer) clearInterval(timer);
-      timer = setInterval(schedule, 200);
+      timer = setInterval(schedule, 120);
     } catch (e) { on = false; }
   }
   function stop() {
@@ -203,29 +330,52 @@ const Music = (() => {
     if (on) { stop(); return false; }
     start(); return true;
   }
-  return { start, stop, toggle, get on() { return on; } };
+  return { start, stop, toggle, duck, get on() { return on; } };
 })();
 
 /* ---------- TTS výslovnost ---------- */
-const Speak = {
-  _voices: [],
-  load() {
-    if ("speechSynthesis" in window) {
-      this._voices = speechSynthesis.getVoices();
-      speechSynthesis.onvoiceschanged = () => { this._voices = speechSynthesis.getVoices(); };
-    }
-  },
-  say(text, lang) {
-    if (!("speechSynthesis" in window)) return;
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang || "ja-JP";
-    u.rate = 0.85; u.pitch = 1;
-    const v = this._voices.find(v => v.lang === (lang || "ja-JP"));
-    if (v) u.voice = v;
-    speechSynthesis.speak(u);
+const Speak = (() => {
+  let voices = [];
+  function refreshVoices() {
+    try { voices = window.speechSynthesis ? speechSynthesis.getVoices() : []; } catch (e) { voices = []; }
+    return voices;
   }
-};
+  function init() {
+    if (!("speechSynthesis" in window)) return;
+    refreshVoices();
+    try { speechSynthesis.onvoiceschanged = refreshVoices; } catch (e) {}
+  }
+  function say(text, lang, onDone) {
+    if (!("speechSynthesis" in window)) { if (onDone) onDone(false); return false; }
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang || "ja-JP";
+      u.rate = 0.85; u.pitch = 1.05; u.volume = 1;
+      refreshVoices();
+      const want = (lang || "ja-JP").toLowerCase();
+      const v = voices.find(v => (v.lang || "").toLowerCase() === want) || voices[0];
+      if (v) u.voice = v;
+      u.onerror = () => { if (onDone) onDone(false); };
+      u.onend = () => { if (onDone) onDone(true); };
+      if (speechSynthesis.paused) speechSynthesis.resume();
+      speechSynthesis.speak(u);
+      return true;
+    } catch (e) { if (onDone) onDone(false); return false; }
+  }
+  return { init, say, refreshVoices };
+})();
+
+/* přehraje slovo + při selhání TTS ukáže foneticky */
+function playWord(text, lang, btn) {
+  const fallback = () => toast("🔊 Výslovnost: " + text);
+  const ok = Speak.say(text, lang, (worked) => {
+    if (btn) btn.classList.remove("speaking");
+    if (!worked) fallback();
+  });
+  if (btn) btn.classList.add("speaking");
+  if (!ok) fallback();
+}
 
 /* ---------- rozpoznávání řeči (výslovnost) ---------- */
 const Recog = (() => {
@@ -285,7 +435,7 @@ const LB = {
           if (Array.isArray(d)) scores = d;
         }
       } catch (e) {}
-      const name = (state.playerName || "Hráč").slice(0, 16);
+      const name = (state.user || state.playerName || "Hráč").slice(0, 16);
       const li = levelInfo(state.xp);
       const me = { name, lang: state.lang, xp: state.xp, level: li.level, streak: state.streak, ts: Date.now() };
       scores = scores.filter(s => !(s && s.name === me.name));
@@ -318,6 +468,101 @@ const LB = {
   }
 };
 
+/* ---------- účet (jméno + heslo, stay signed) ---------- */
+const Auth = {
+  URL: "https://mantledb.sh/v2/slovko-acc/u/",
+  async hash(pass, salt) {
+    const data = salt + "|" + pass + "|slovko";
+    try {
+      if (window.crypto && crypto.subtle) {
+        const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data));
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+      }
+    } catch (e) {}
+    let h = 5381;
+    for (let i = 0; i < data.length; i++) h = ((h << 5) + h + data.charCodeAt(i)) | 0;
+    return "f" + (h >>> 0).toString(16);
+  },
+  randSalt() { return Math.random().toString(36).slice(2) + Date.now().toString(36); },
+  async fetchAcc(name) {
+    try {
+      const r = await fetch(this.URL + encodeURIComponent(name), { cache: "no-store" });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d && d.h ? d : null;
+    } catch (e) { return null; }
+  },
+  async register(name, pass) {
+    name = (name || "").trim().slice(0, 16);
+    if (!name || !pass) return { ok: false, msg: "Zadej jméno i heslo." };
+    if (await this.fetchAcc(name)) return { ok: false, msg: "Tohle jméno už někdo používá." };
+    const salt = this.randSalt();
+    const h = await this.hash(pass, salt);
+    try {
+      const r = await fetch(this.URL + encodeURIComponent(name), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ h, salt, ts: Date.now() })
+      });
+      if (!r.ok) return { ok: false, msg: "Server účet nepřijal. Zkus to znovu." };
+    } catch (e) { return { ok: false, msg: "Jsi offline. Hraj jako host." }; }
+    return { ok: true, name };
+  },
+  async login(name, pass) {
+    name = (name || "").trim().slice(0, 16);
+    if (!name || !pass) return { ok: false, msg: "Zadej jméno i heslo." };
+    const acc = await this.fetchAcc(name);
+    if (!acc) return { ok: false, msg: "Účet neexistuje. Vytvoř si ho." };
+    const h = await this.hash(pass, acc.salt);
+    if (h !== acc.h) return { ok: false, msg: "Špatné heslo." };
+    return { ok: true, name };
+  },
+  signedIn() { return !!state.user; },
+  showLogin() {
+    if (this.signedIn() || $("#loginOverlay")) return;
+    const ov = el("div", { id: "loginOverlay", class: "login-overlay" });
+    const err = el("div", { class: "login-err" });
+    const stayChk = el("input", { type: "checkbox", id: "stayCheck", checked: "checked" });
+    const nameInp = el("input", { class: "name-input", type: "text", placeholder: "Jméno", maxlength: "16", autocomplete: "username" });
+    const passInp = el("input", { class: "name-input", type: "password", placeholder: "Heslo", autocomplete: "current-password" });
+    const setErr = (m) => { err.textContent = m || ""; };
+    const finish = (name) => {
+      state.user = name;
+      state.stay = stayChk.checked;
+      state.guest = false;
+      save();
+      ov.remove();
+      renderTop();
+      renderPath();
+    };
+    ov.appendChild(el("div", { class: "login-card" }, [
+      el("div", { class: "login-owl", text: "🦉" }),
+      el("h2", { text: "Slovko" }),
+      el("div", { class: "sub", style: "margin-bottom:10px" }, "Přihlas se, ať ti nikdo neukradne jméno v žebříčku."),
+      nameInp, passInp,
+      el("label", { class: "login-stay" }, [stayChk, el("span", { text: " Zůstat přihlášen" })]),
+      err,
+      el("button", { class: "btn-big", text: "Přihlásit se", onclick: async () => {
+        setErr("Čekám…"); Sound.init();
+        const r = await Auth.login(nameInp.value, passInp.value);
+        if (r.ok) { Sound.fanfare(); finish(r.name); } else { setErr(r.msg); Sound.wrong(); }
+      } }),
+      el("button", { class: "btn-big violet", text: "Vytvořit účet", onclick: async () => {
+        setErr("Čekám…"); Sound.init();
+        const r = await Auth.register(nameInp.value, passInp.value);
+        if (r.ok) { Sound.fanfare(); finish(r.name); } else { setErr(r.msg); Sound.wrong(); }
+      } }),
+      el("button", { class: "btn-big ghost", text: "Hrát jako host", onclick: () => {
+        Sound.click();
+        state.user = "Hráč" + randi(100, 999);
+        state.guest = true; state.stay = false;
+        save();
+        ov.remove(); renderTop(); renderPath();
+      } })
+    ]));
+    document.body.appendChild(ov);
+  }
+};
+
 /* ---------- stav ---------- */
 const KEY = "slovko_v1";
 const DEFAULTS = {
@@ -328,7 +573,9 @@ const DEFAULTS = {
   mastery: {}, unitDone: {}, unlocked: {},
   achievements: {},
   playerName: "", music: true,
-  lbSync: 0, speakCount: 0, listenCount: 0
+  lbSync: 0, speakCount: 0, listenCount: 0,
+  user: "", stay: false, guest: false,
+  dailyWord: "", dailyWordDate: "", aiLang: ""
 };
 let state;
 function loadState() {
@@ -414,15 +661,24 @@ const Mascot = (() => {
   host.appendChild(bubble); host.appendChild(face);
   $("#app").appendChild(host);
   let t = null;
+  let tapCb = null;
   function say(text, ms) {
     bubble.textContent = text;
     host.style.display = "flex";
     if (t) clearTimeout(t);
     if (ms) t = setTimeout(hide, ms);
   }
-  function hide() { host.style.display = "none"; }
+  function hide() { host.style.display = "none"; if (t) { clearTimeout(t); t = null; } }
   function mood(m) { face.textContent = m; }
-  return { say, hide, mood };
+  function onTap(cb) {
+    tapCb = cb;
+    host.classList.toggle("clickable", !!cb);
+  }
+  face.addEventListener("click", () => {
+    Sound.init(); Sound.click();
+    if (tapCb) tapCb();
+  });
+  return { say, hide, mood, onTap };
 })();
 
 /* ---------- navigace ---------- */
@@ -431,11 +687,31 @@ function showView(name) {
   currentView = name;
   $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.nav === name));
   if (name === "path") renderPath();
+  else if (name === "ai") renderAI();
   else if (name === "achiev") renderAchievements();
   else if (name === "leaderboard") renderLeaderboard();
   else if (name === "profile") renderProfile();
   const v = $("#view"); v.scrollTop = 0;
+  v.style.animation = "none"; void v.offsetWidth; v.style.animation = "";
 }
+
+/* jiskřivý klikový efekt */
+function sparkle(x, y) {
+  const emojis = ["✨", "⭐", "💫", "🌟"];
+  for (let i = 0; i < 4; i++) {
+    const s = el("span", { class: "sparkle", text: pick(emojis) });
+    const ang = rnd(0, Math.PI * 2), dist = rnd(16, 42);
+    s.style.left = (x + rnd(-5, 5)) + "px";
+    s.style.top = (y + rnd(-5, 5)) + "px";
+    s.style.setProperty("--sx", (Math.cos(ang) * dist) + "px");
+    s.style.setProperty("--sy", (Math.sin(ang) * dist - 10) + "px");
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 650);
+  }
+}
+document.addEventListener("pointerdown", (e) => {
+  if (e.target && e.target.closest && e.target.closest("button")) sparkle(e.clientX, e.clientY);
+});
 $("#logoBtn").addEventListener("click", () => { Sound.init(); Sound.click(); showView("path"); });
 $("#xpBox").addEventListener("click", () => { Sound.click(); showView("profile"); });
 $$(".nav-btn").forEach(b => b.addEventListener("click", () => { Sound.init(); Sound.click(); showView(b.dataset.nav); }));
@@ -456,7 +732,7 @@ function renderPath() {
   v.appendChild(el("div", { class: "screen-head" },
     [ el("span", { class: "icon", text: lang.flag }),
       el("div", { class: "title", text: "Co se dnes naučíš?" }),
-      el("button", { class: "speak-btn", text: "🔊", onclick: () => { Sound.click(); Speak.say(lang.native, lang.tts); } }) ]));
+      el("button", { class: "speak-btn", text: "🔊", onclick: (e) => { Sound.init(); playWord(lang.native, lang.tts, e.currentTarget); } }) ]));
 
   /* výběr jazyka */
   const grid = el("div", { class: "lang-grid" });
@@ -513,6 +789,18 @@ function renderPath() {
   });
   v.appendChild(path);
 
+  /* denní slovo (gacha krabička) */
+  const dw = WORD_BY_ID[state.dailyWord];
+  const dwFresh = state.dailyWordDate === dateStr();
+  v.appendChild(el("div", { class: "card goal-box", style: "cursor:pointer" }, [
+    el("span", { class: "g-ico", text: "🎁" }),
+    el("div", { class: "goal-wrap", style: "flex:1" }, [
+      el("div", { class: "sub", text: "Denní slovo" }),
+      el("div", { class: "sub", style: "color:var(--primary)" }, dwFresh && dw ? (lang.flag + " " + wordTarget(dw, state.lang).display) : "Otevři krabičku a získej slovo dne!")
+    ]),
+    el("button", { class: "btn-save", text: dwFresh ? "🔁 Zopakovat" : "🎁 Otevřít", onclick: () => { Sound.init(); openCrate(); } })
+  ]));
+
   /* tréninky */
   const drill = el("div", { class: "drill-row" });
   drill.appendChild(el("button", { class: "drill-card blue", onclick: () => { Sound.init(); Sound.click(); startDrill("listen"); } },
@@ -530,7 +818,136 @@ function renderPath() {
   }
 }
 
-/* ---------- ÚSPĚCHY ---------- */
+/* ---------- AI TRENÉR ---------- */
+const AIChat = (() => {
+  let messages = [];
+  let busy = false;
+  function reset(lang) {
+    const l = LANGS[lang];
+    messages = [
+      { role: "system", content: "Jsi přátelský a trpělivý učitel jazyků. Žák se učí " + l.name + " (" + l.native + ") a mluví česky, je začátečník. Odpovídej KRÁTCE (max 3-4 věty), česky, a nauč ho něco užitečného: slovíčko, frázi nebo jednoduchou větu v " + l.name + " s výslovností v závorce. Vysvětluj jednoduše, opravuj chyby, chval, ptej se zpětně." },
+      { role: "assistant", content: "Ahoj! 👋 Jsem tvůj AI trenér " + l.name + ". Můžeme si povídat, naučím tě slovíčka i fráze. Co zkusíme?" }
+    ];
+  }
+  function history() { return messages; }
+  async function send(text) {
+    if (busy) return null;
+    busy = true;
+    messages.push({ role: "user", content: text });
+    try {
+      const r = await fetch("https://text.pollinations.ai/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages, model: "openai" })
+      });
+      if (!r.ok) throw new Error("http " + r.status);
+      const d = await r.json();
+      const reply = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+      if (!reply) throw new Error("empty");
+      messages.push({ role: "assistant", content: reply });
+      busy = false;
+      return reply;
+    } catch (e) {
+      busy = false;
+      return null;
+    }
+  }
+  return { reset, send, history, get busy() { return busy; } };
+})();
+
+function renderAI() {
+  const v = $("#view");
+  v.innerHTML = "";
+  const aiLang = state.aiLang || state.lang;
+  const lang = LANGS[aiLang];
+
+  v.appendChild(el("div", { class: "screen-head" }, [
+    el("span", { class: "icon", text: "🤖" }),
+    el("div", { class: "title", text: "AI trenér" }),
+    el("span", { class: "icon", text: lang.flag })
+  ]));
+
+  /* výběr jazyka pro AI */
+  const chips = el("div", { class: "lang-grid", style: "margin-bottom:8px" });
+  Object.keys(LANGS).forEach(code => {
+    const l = LANGS[code];
+    chips.appendChild(el("button", {
+      class: "lang-card" + (code === aiLang ? " selected" : ""), onclick: () => {
+        Sound.click();
+        state.aiLang = code;
+        save();
+        AIChat.reset(code);
+        renderAI();
+      }
+    }, [ el("span", { class: "flag", text: l.flag }), el("span", { class: "name", text: l.name }) ]));
+  });
+  v.appendChild(chips);
+
+  /* rychlé volby */
+  const quick = el("div", { class: "drill-row", style: "grid-template-columns:1fr 1fr" });
+  const chipsQ = [
+    ["🍎 Nauč mě 5 slovíček", "Nauč mě 5 užitečných slovíček v " + lang.name + " s výslovností."],
+    ["💬 Povídej si se mnou", "Popovídej si se mnou jednoduše v " + lang.name + "."],
+    ["🙋 Jak se představím", "Nauč mě, jak se představit v " + lang.name + "."],
+    ["✏️ Oprav mě", "Řekni mi, jak se řekne: 'Já jít do obchod včera.'"]
+  ];
+  chipsQ.forEach(([label, q]) => {
+    quick.appendChild(el("button", { class: "drill-card blue", style: "margin-bottom:0", onclick: () => { Sound.init(); sendAI(q); } },
+      [ el("div", { class: "d-ico", text: label.split(" ")[0] }), el("div", { class: "d-name", text: label.split(" ").slice(1).join(" ") }) ]));
+  });
+  v.appendChild(quick);
+
+  const chat = el("div", { class: "chat" });
+  v.appendChild(chat);
+
+  const inputRow = el("div", { class: "chat-input-row" });
+  const inp = el("input", { class: "type-input", type: "text", placeholder: "Napiš nebo řekni…", style: "margin-top:0;text-align:left" });
+  const micBtn = el("button", { class: "mic-btn", style: "width:48px;height:48px;font-size:20px", text: "🎤", title: "Mluvit", onclick: async () => {
+    if (!Recog.available) { toast("🎤 Mikrofon není dostupný v tomto prohlížeči."); return; }
+    Sound.init();
+    micBtn.classList.add("listening"); micBtn.disabled = true;
+    toast("🎤 Poslouchám… mluv " + lang.native);
+    const ok = Recog.listen(lang.tts, (texts) => {
+      micBtn.classList.remove("listening"); micBtn.disabled = false;
+      if (texts && texts[0]) { inp.value = texts[0]; sendAI(inp.value); }
+    }, () => { micBtn.classList.remove("listening"); micBtn.disabled = false; toast("Neslyšel jsem tě. Zkus znovu."); });
+    if (!ok) { micBtn.classList.remove("listening"); micBtn.disabled = false; toast("🎤 Mikrofon selhal."); }
+  } });
+  const sendBtn = el("button", { class: "btn-save", text: "Odeslat", onclick: () => { const t = inp.value.trim(); if (t) { inp.value = ""; sendAI(t); } } });
+  inputRow.appendChild(inp);
+  inputRow.appendChild(micBtn);
+  inputRow.appendChild(sendBtn);
+  v.appendChild(inputRow);
+
+  const onEnter = (e) => { if (e.key === "Enter") { e.preventDefault(); const t = inp.value.trim(); if (t) { inp.value = ""; sendAI(t); } } };
+  inp.addEventListener("keydown", onEnter);
+
+  function addMsg(role, text) {
+    const m = el("div", { class: "chat-msg " + role });
+    if (role === "assistant") {
+      m.appendChild(el("div", { class: "chat-bubble", text }));
+      m.appendChild(el("button", { class: "speak-btn", style: "width:34px;height:34px;font-size:15px", text: "🔊", onclick: (ev) => { Sound.init(); playWord(text, lang.tts, ev.currentTarget); } }));
+    } else {
+      m.appendChild(el("div", { class: "chat-bubble", text }));
+    }
+    chat.appendChild(m);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  window.__aiChat = { addMsg, chat, v };
+  if (AIChat.history().length === 0) AIChat.reset(aiLang);
+  AIChat.history().forEach(m => { if (m.role !== "system") addMsg(m.role, m.content); });
+
+  async function sendAI(text) {
+    addMsg("user", text);
+    const typing = el("div", { class: "chat-msg ai" }, [ el("div", { class: "chat-bubble typing", text: "🤖 píše…" }) ]);
+    chat.appendChild(typing);
+    chat.scrollTop = chat.scrollHeight;
+    const reply = await AIChat.send(text);
+    typing.remove();
+    if (reply) addMsg("assistant", reply);
+    else addMsg("assistant", "Jsem teď offline… Zkus to prosím za chvíli nebo po připojení. 🙏");
+  }
+}
 function achValue(track) {
   switch (track) {
     case "lessons": return state.lessons;
@@ -588,21 +1005,14 @@ function renderLeaderboard() {
     el("button", { class: "speak-btn", text: "🔄", onclick: () => { Sound.click(); renderLeaderboard(); } })
   ]));
 
-  v.appendChild(el("div", { class: "card name-row" }, [
-    el("input", {
-      class: "name-input", type: "text", value: state.playerName,
-      placeholder: "Tvoje přezdívka…",
-      maxlength: "16"
-    }),
-    el("button", {
-      class: "btn-save", text: "Uložit", onclick: (e) => {
-        const inp = e.currentTarget.previousSibling;
-        state.playerName = (inp.value || "").trim().slice(0, 16);
-        save();
-        toast("✅ Jméno uloženo");
-        Sound.click();
-      }
-    })
+  v.appendChild(el("div", { class: "card name-row", style: "justify-content:space-between" }, [
+    el("div", { class: "lb-info" }, [
+      el("div", { class: "lb-name", text: Auth.signedIn() ? state.user : (state.user || "Host") }),
+      el("div", { class: "lb-sub", text: Auth.signedIn() ? "Přihlášen ✓ · jméno chráněno" : "Přihlas se, ať je tvoje jméno tvoje." })
+    ]),
+    Auth.signedIn()
+      ? el("button", { class: "btn-save", style: "background:#ff5252;box-shadow:0 4px 0 #c0392b", text: "Odhlásit", onclick: () => { Sound.click(); state.user = ""; state.stay = false; state.guest = true; save(); renderLeaderboard(); } })
+      : el("button", { class: "btn-save", text: "Přihlásit", onclick: () => { Sound.click(); Auth.showLogin(); } })
   ]));
 
   v.appendChild(el("div", { class: "lb-status", id: "lbStatus", text: "Načítám žebříček… 🌐" }));
@@ -615,7 +1025,7 @@ function renderLeaderboard() {
       $("#lbStatus").textContent = "Žebříček je zatím prázdný. Dokonči lekci a objevíš se tu! 🌍";
       return;
     }
-    const name = (state.playerName || "Hráč").trim();
+    const name = (state.user || state.playerName || "Hráč").trim();
     let myIdx = -1;
     scores.forEach((s, i) => { if (s && s.name === name) myIdx = i; });
     list.innerHTML = "";
@@ -652,20 +1062,24 @@ function renderProfile() {
   const li = levelInfo(state.xp);
 
   v.appendChild(el("div", { class: "card" }, [
-    el("div", { class: "sub", style: "margin-bottom:8px" }, "Přezdívka (do žebříčku)"),
-    el("div", { class: "name-row" }, [
-      el("input", {
-        class: "name-input", type: "text", value: state.playerName,
-        placeholder: "Tvoje přezdívka…", maxlength: "16"
-      }),
-      el("button", {
-        class: "btn-save", text: "Uložit", onclick: (e) => {
-          const inp = e.currentTarget.previousSibling;
-          state.playerName = (inp.value || "").trim().slice(0, 16);
-          save(); Sound.click(); toast("✅ Jméno uloženo");
-        }
-      })
-    ])
+    el("div", { class: "sub", style: "margin-bottom:8px" }, "Účet"),
+    Auth.signedIn()
+      ? el("div", { class: "name-row" }, [
+          el("div", { class: "lb-info" }, [
+            el("div", { class: "lb-name", text: "👤 " + state.user }),
+            el("div", { class: "lb-sub", text: (state.stay ? "Zůstáváš přihlášen" : "Budeš se muset přihlásit") + " · jméno chráněno ✓" })
+          ]),
+          el("button", { class: "btn-save", style: "background:#ff5252;box-shadow:0 4px 0 #c0392b", text: "Odhlásit", onclick: () => {
+            Sound.click(); state.user = ""; state.stay = false; state.guest = true; save(); renderProfile();
+          } })
+        ])
+      : el("div", { class: "name-row" }, [
+          el("div", { class: "lb-info" }, [
+            el("div", { class: "lb-name", text: "🕹️ Hráš jako host: " + (state.user || "Host") }),
+            el("div", { class: "lb-sub", text: "Přihlas se, ať ti nikdo neukradne jméno." })
+          ]),
+          el("button", { class: "btn-save", text: "Přihlásit", onclick: () => { Sound.click(); Auth.showLogin(); } })
+        ])
   ]));
   v.appendChild(el("div", { class: "card", style: "text-align:center" }, [
     el("div", { class: "prof-avatar", text: "🦉" }),
@@ -828,14 +1242,87 @@ function typeAccepted(q, ans) {
 
 function startLesson(unit, mode) {
   Sound.init();
-  lesson = {
-    unit, lang: state.lang, mode,
-    qs: buildPool(unit, Q_LEN).map(w => makeQuestion(w, state.lang)),
-    idx: 0, correct: 0, wrong: 0, xp: 0, combo: 0, maxCombo: 0, failed: false
-  };
+  const words = buildPool(unit, Q_LEN);
   $("#bottomnav").classList.add("hidden");
   Mascot.hide();
-  renderLesson();
+  /* nejdřív se slova nauč — pak test */
+  startStudy(words, () => {
+    lesson = {
+      unit, lang: state.lang, mode,
+      qs: words.map(w => makeQuestion(w, state.lang)),
+      idx: 0, correct: 0, wrong: 0, xp: 0, combo: 0, maxCombo: 0, failed: false
+    };
+    renderLesson();
+  });
+}
+
+/* ---------- studijní karty (učení před testem) ---------- */
+function startStudy(words, onDone) {
+  const v = $("#view");
+  const lang = LANGS[state.lang];
+  let i = 0;
+  v.innerHTML = "";
+
+  const head = el("div", { class: "screen-head" }, [
+    el("button", { class: "exit-btn", text: "✕", onclick: () => {
+      Sound.click();
+      document.removeEventListener("keydown", studyKey);
+      $("#bottomnav").classList.remove("hidden"); showView("path");
+    } }),
+    el("div", { class: "title", text: "📖 Nauč se slova" }),
+    el("span", { class: "sub", text: "1/" + words.length })
+  ]);
+  v.appendChild(head);
+
+  const dots = el("div", { class: "study-dots" });
+  words.forEach(() => dots.appendChild(el("span", { class: "study-dot" })));
+  v.appendChild(dots);
+
+  const card = el("div", { class: "study-card", onclick: () => card.classList.toggle("flipped") });
+  const front = el("div", { class: "study-face" });
+  const back = el("div", { class: "study-face back" });
+  card.appendChild(el("div", { class: "study-inner" }, [front, back]));
+  v.appendChild(card);
+
+  const bottom = el("div", { class: "lesson-bottom" });
+  const nextBtn = el("button", { class: "btn-check ready", text: "Další →", onclick: () => {
+    Sound.click();
+    if (i < words.length - 1) { i++; renderWord(words[i]); }
+    else {
+      Sound.fanfare();
+      document.removeEventListener("keydown", studyKey);
+      onDone();
+    }
+  } });
+  bottom.appendChild(nextBtn);
+  v.appendChild(bottom);
+
+  function renderWord(w) {
+    const t = wordTarget(w, state.lang);
+    front.innerHTML = "";
+    front.appendChild(el("div", { class: "study-hint", text: "👆 Klepni na kartu pro překlad" }));
+    front.appendChild(el("div", { class: "study-word" + (state.lang === "ja" ? " ja" : ""), text: t.display }));
+    if (t.sub) front.appendChild(el("div", { class: "study-read", text: t.sub }));
+    front.appendChild(el("button", { class: "speak-btn", text: "🔊", onclick: (e) => { e.stopPropagation(); Sound.init(); playWord(t.display, lang.tts, e.currentTarget); } }));
+
+    back.innerHTML = "";
+    back.appendChild(el("div", { class: "study-hint", text: w.ico + " " + w.unitName }));
+    back.appendChild(el("div", { class: "study-trans", text: w.cs }));
+    back.appendChild(el("div", { class: "study-read", text: "🇬🇧 " + w.en + (state.lang === "ja" ? " · 🈂️ " + w.romaji : "")}));
+    back.appendChild(el("div", { class: "study-hint", text: "Klepni na kartu zpět" }));
+
+    card.classList.remove("flipped");
+    Array.from(dots.children).forEach((d, idx) => d.classList.toggle("on", idx === i));
+    head.children[2].textContent = (i + 1) + "/" + words.length;
+    nextBtn.textContent = i < words.length - 1 ? "Další →" : "🚀 Začít test";
+    setTimeout(() => playWord(t.display, lang.tts), 350);
+  }
+  renderWord(words[0]);
+  const studyKey = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nextBtn.click(); }
+  };
+  document.addEventListener("keydown", studyKey);
+  window.__slovkoKey = studyKey;
 }
 function startPractice() {
   /* smíšená praxe ze všech odemčených slov, žádné XP, +1 srdce */
@@ -851,6 +1338,56 @@ function startPractice() {
   Mascot.hide();
   renderLesson();
 }
+/* ---------- DENNÍ SLOVO (gacha) ---------- */
+function openCrate() {
+  const ov = el("div", { class: "crate-overlay" });
+  const card = el("div", { class: "crate-card" });
+  const fresh = state.dailyWordDate !== dateStr();
+  const cands = ALL_WORDS.filter(w => getMastery(w.id) < 3);
+  const w = pick(cands.length ? cands : ALL_WORDS);
+  state.dailyWord = w.id;
+  state.dailyWordDate = dateStr();
+  save();
+  const lang = LANGS[state.lang];
+  const t = wordTarget(w, state.lang);
+  let revealed = false;
+
+  card.appendChild(el("div", { class: "sub", text: fresh ? "🎁 Slovo dne pro tebe!" : "🔁 Zopakuj si slovo dne" }));
+  const box = el("div", { class: "crate-box", text: "📦" });
+  card.appendChild(box);
+  const result = el("div", { class: "crate-reveal hidden" });
+  card.appendChild(result);
+  const xpLine = el("div", { class: "crate-xp" });
+  card.appendChild(xpLine);
+  card.appendChild(el("button", { class: "btn-big", text: "Skončeno ✓", onclick: () => { Sound.click(); ov.remove(); renderPath(); } }));
+
+  box.onclick = () => {
+    if (revealed) return;
+    revealed = true;
+    Sound.fanfare();
+    Confetti.burst(140);
+    box.classList.add("opening");
+    box.textContent = "✨";
+    setTimeout(() => {
+      result.classList.remove("hidden");
+      result.innerHTML = "";
+      result.appendChild(el("div", { class: "crate-word" + (state.lang === "ja" ? " ja" : ""), text: t.display }));
+      if (t.sub) result.appendChild(el("div", { class: "crate-read", text: t.sub }));
+      result.appendChild(el("div", { class: "crate-trans", text: w.cs + " · 🇬🇧 " + w.en }));
+      result.appendChild(el("button", { class: "speak-btn", text: "🔊", onclick: (e) => { Sound.init(); playWord(t.display, lang.tts, e.currentTarget); } }));
+      if (fresh) {
+        addXp(10);
+        flyXp("+10 XP");
+        xpLine.textContent = "+10 XP za slovo dne! 🎉";
+      } else {
+        xpLine.textContent = "Slovo dne už odemčeno — zopakuj si ho.";
+      }
+    }, 500);
+  };
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+}
+
 function startDrill(drillType) {
   /* samostatný trénink: 'listen' nebo 'speak' — všechny otázky daného typu */
   Sound.init();
@@ -917,8 +1454,8 @@ function renderLesson() {
     qcard.appendChild(el("div", { class: "q-reading", text: q.reading }));
   }
   if (q.say) {
-    qcard.appendChild(el("button", { class: "speak-btn", text: "🔊", onclick: (e) => { Sound.click(); Speak.say(q.say, LANGS[q.lang].tts); e.currentTarget.classList.add("speaking"); setTimeout(() => e.currentTarget.classList.remove("speaking"), 1200); } }));
-    setTimeout(() => { Speak.say(q.say, LANGS[q.lang].tts); }, 400);
+    qcard.appendChild(el("button", { class: "speak-btn", text: "🔊", onclick: (e) => { Sound.init(); playWord(q.say, LANGS[q.lang].tts, e.currentTarget); } }));
+    setTimeout(() => { playWord(q.say, LANGS[q.lang].tts); }, 400);
   }
   v.appendChild(qcard);
 
@@ -939,7 +1476,7 @@ function renderLesson() {
       class: "hint-btn",
       text: isListenType ? "🔁 Přehraj znovu" : "💡 Nápověda",
       onclick: (e) => {
-        if (isListenType) { Sound.click(); Speak.say(q.say, LANGS[q.lang].tts); }
+        if (isListenType) { Sound.init(); playWord(q.say, LANGS[q.lang].tts); }
         else e.currentTarget.textContent = "Nápověda: " + (q.lang === "ja" ? q.w.romaji : q.w[q.lang]);
       }
     });
@@ -955,7 +1492,7 @@ function renderLesson() {
       msg.textContent = "Poslechni si výslovnost a opakuj nahlas.";
       repeatBtns = el("div", { class: "drill-row", style: "width:100%" });
       const okBtn = el("button", { class: "drill-card green", html: "<div class='d-ico'>✅</div><div class='d-name'>Zvládám</div>", onclick: () => finishSpeak(true) });
-      const againBtn = el("button", { class: "drill-card blue", html: "<div class='d-ico'>🔁</div><div class='d-name'>Ještě jednou</div>", onclick: () => { Sound.click(); Speak.say(q.say, LANGS[q.lang].tts); } });
+      const againBtn = el("button", { class: "drill-card blue", html: "<div class='d-ico'>🔁</div><div class='d-name'>Ještě jednou</div>", onclick: () => { Sound.init(); playWord(q.say, LANGS[q.lang].tts); } });
       const noBtn = el("button", { class: "drill-card pink", html: "<div class='d-ico'>😅</div><div class='d-name'>Nevím</div>", onclick: () => finishSpeak(false) });
       repeatBtns.appendChild(okBtn); repeatBtns.appendChild(againBtn); repeatBtns.appendChild(noBtn);
       area.appendChild(repeatBtns);
@@ -1034,6 +1571,47 @@ function renderLesson() {
     checkBtn.style.display = "";
   }
 
+  /* hudba se ztiší u poslechových a mluvených cvičení */
+  if (q.type === "listening" || q.type === "listentype" || q.type === "speak") Music.duck(0.15);
+  else Music.duck(1);
+
+  /* sova-pomocnice: po nečinnosti napoví */
+  Mascot.hide();
+  Mascot.onTap(null);
+  let idleT = null, hinted = false;
+  function applyHint() {
+    if (q.type === "choice" || q.type === "reverse" || q.type === "truefalse") {
+      $$(".answer-btn", v).forEach(b => {
+        if (b.textContent === q.correct) { b.classList.add("correct"); }
+      });
+      toast("💡 Tohle je správná odpověď!");
+    } else if (q.type === "type" || q.type === "listentype") {
+      if (typeInput) typeInput.placeholder = q.lang === "ja" ? "💡 Tip: " + q.w.romaji : "💡 Tip: " + q.w[q.lang];
+      toast("💡 Nápověda v místě pro psaní");
+    } else if (q.type === "speak") {
+      playWord(q.say, LANGS[q.lang].tts);
+      toast("💡 Poslechni si výslovnost a opakuj");
+    }
+  }
+  function fireIdle() {
+    if (questionState.checked) return;
+    Mascot.mood("🤔");
+    Mascot.say("Zasekl ses? Klepni na mě 👆", 0);
+    Mascot.onTap(() => {
+      Mascot.mood("😊");
+      Mascot.say("Tady máš nápovědu! 💡", 2200);
+      if (!hinted) { hinted = true; applyHint(); }
+    });
+  }
+  function resetIdle() {
+    if (questionState.checked) return;
+    if (idleT) clearTimeout(idleT);
+    idleT = setTimeout(fireIdle, 12000);
+  }
+  v.addEventListener("pointerdown", resetIdle);
+  if (typeInput) typeInput.addEventListener("input", resetIdle);
+  resetIdle();
+
   const onKey = (e) => {
     if (e.key === "Enter") { e.preventDefault(); checkBtn.click(); }
   };
@@ -1078,6 +1656,8 @@ function checkAnswer(q, ans, typeInput, ansGrid, fb, checkBtn, v) {
     else $$(".answer-btn", v).forEach(b => { if (b.textContent === q.correct) b.classList.add("correct"); });
     if (lesson.mode === "lesson") {
       state.hearts = Math.max(0, state.hearts - 1);
+      const hb = $("#heartsBox");
+      hb.classList.remove("lose"); void hb.offsetWidth; hb.classList.add("lose");
       if (state.hearts < 5 && !state.heartsRegenAt) state.heartsRegenAt = Date.now() + 30 * 60 * 1000;
       renderTop();
       if (state.hearts <= 0) {
@@ -1152,6 +1732,7 @@ function addXp(n) {
 function renderResult(success) {
   const v = $("#view");
   $("#bottomnav").classList.remove("hidden");
+  Music.duck(1);
   v.innerHTML = "";
 
   if (success) {
@@ -1209,7 +1790,8 @@ function init() {
   $("#musicBtn").classList.toggle("off", !state.music);
   $("#musicIco").textContent = state.music ? "🎵" : "🔇";
   showView("path");
-  Speak.load();
+  Speak.init();
+  if (!state.user) setTimeout(() => Auth.showLogin(), 400);
 
   /* hudba: spustí se po první interakci (autoplay pravidla) */
   const startMusic = () => {
